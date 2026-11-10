@@ -1,0 +1,36 @@
+# Local test dependencies only. Mirrors the GitHub Actions `services:` block
+# so a laptop and CI exercise the same Postgres/Redis versions.
+#
+#   npm run test:db:up     # start + wait for health
+#   npm test
+#   npm run test:db:down   # stop and delete the volumes
+#
+# Postgres uses a dedicated `hostel_emergency_test` database and Redis is
+# addressed as DB index 1 (see .env.test.example), so the suite never touches
+# a running dev stack.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: hostel_emergency_test
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d hostel_emergency_test']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    # No persistence: this is a throwaway queue/pub-sub store for tests.
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 20

@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "hooks:install": "git config core.hooksPath .husky && chmod +x .husky/pre-commit"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.2.0"
+  }
+}

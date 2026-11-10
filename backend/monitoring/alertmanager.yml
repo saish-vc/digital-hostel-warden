@@ -1,0 +1,49 @@
+# =============================================================================
+# ALERTMANAGER ROUTING for the Hostel Emergency demo stack.
+#
+# DELIBERATELY A STUB. In a real deployment the "generic-webhook" receiver
+# points at whatever you actually page with: a Slack incoming webhook
+# (https://hooks.slack.com/services/...), PagerDuty Events API, an Opsgenie
+# integration, or even an SMTP email sender. The demo does NOT sign up for
+# any of those: the receiver targets a placeholder on the host that can log
+# payloads (see Section 7 — `docker run ... -p 5001:5001 stoplight/...` or a
+# one-line Node http server will do).
+#
+# Nothing about the PROMETHEUS side needs to change when you swap this stub
+# for a real receiver: rules -> alertmanager -> receiver, kept deliberately
+# decoupled.
+# =============================================================================
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: generic-webhook
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - match:
+        severity: critical
+      receiver: generic-webhook
+      group_wait: 0s       # page IMMEDIATELY on critical (failed escalations!)
+      repeat_interval: 1h
+
+receivers:
+  - name: generic-webhook
+    webhook_configs:
+      # PLACEHOLDER. Not a real pager. CHANGE-ME before a real deployment.
+      - url: 'http://host.docker.internal:5001/alerts'
+        send_resolved: true
+
+inhibit_rules:
+  # One failing worker usually tri-blasts (InstanceDown AND
+  # EscalationFailuresHigh both fire). Suppress the flow-through pages once
+  # the ROOT CAUSE alert (InstanceDown) is firing: one page, not four.
+  - source_match:
+      severity: 'critical'
+      alertname: 'InstanceDown'
+    target_match_re:
+      alertname: '(EscalationFailuresHigh|SMSSuccessRateLow)'
+    equal: ['instance']

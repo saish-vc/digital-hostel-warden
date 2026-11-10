@@ -1,0 +1,14 @@
+# Grafana dashboard provisioning — loads every JSON under /var/lib/grafana/
+# dashboards on container start (volume-mounted in docker-compose.monitoring.yml).
+apiVersion: 1
+
+providers:
+  - name: 'hostel-emergency'
+    orgId: 1
+    folder: 'Hostel Emergency'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

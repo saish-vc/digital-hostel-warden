@@ -1,0 +1,65 @@
+# =============================================================================
+# Prometheus scrape + alerting configuration for the Hostel Emergency System.
+# Started together with Grafana/Alertmanager via:
+#
+#  docker compose -f docker-compose.monitoring.yml up -d
+#
+# TARGETS: 3 API instances (ports 3001/3002/3003 via PM2 cluster) plus the
+# escalation worker (WORKER_METRICS_PORT, default 4001).
+# The worker needs its own target: counters incremented in the worker
+# process (escalations_fired_total, sms_sent_total) exist ONLY in the
+# worker's registry — scraping exclusively the API instances would report
+# them as permanently zero and lie on the Grafana escalation panel.
+#
+# HOST.DOCKER.INTERNAL: the monitoring stack runs INSIDE docker-compose
+# containers; the API/PM2 processes run (docker or bare) on the host.
+# host.docker.internal resolves to the host's gateway address from inside
+# Docker Desktop (Windows/macOS) and, with the extra_hosts entry in
+# docker-compose.monitoring.yml, also on Linux. A metrics endpoint bound to
+# 127.0.0.1 only is therefore UNREACHABLE from Prometheus — which is exactly
+# why /metrics is protected with a token instead of a loopback bind.
+# =============================================================================
+
+global:
+  # 15s scrape == 15s gauge refresh (startQueueMetrics in src/index.ts):
+  # no scrape ever sees values older than one refresh period.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# ---------------------------------------------------------------------------
+# Alerting pipeline: rule eval -> firing alerts -> Alertmanager -> webhook.
+# ---------------------------------------------------------------------------
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # The three API instances (PM2 cluster workers on 3001/3002/3003).
+  # `token` MUST equal the backend's METRICS_TOKEN (backend/.env).
+  # ---------------------------------------------------------------------------
+  - job_name: 'api'
+    metrics_path: '/metrics'
+    params:
+      token: ['demo-metrics-token-CHANGE-ME']
+    static_configs:
+      - targets:
+          - 'host.docker.internal:3001'
+          - 'host.docker.internal:3002'
+          - 'host.docker.internal:3003'
+
+  # ---------------------------------------------------------------------------
+  # The single BullMQ escalation worker (fork process).
+  # Make the host port PUBLIC here to match WORKER_METRICS_PORT in backend/.env.
+  # ---------------------------------------------------------------------------
+  - job_name: 'worker'
+    metrics_path: '/metrics'
+    params:
+      token: ['demo-metrics-token-CHANGE-ME']
+    static_configs:
+      - targets:
+          - 'host.docker.internal:4001'

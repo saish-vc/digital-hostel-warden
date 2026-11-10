@@ -1,0 +1,19 @@
+# Gitleaks configuration — narrow allowlists for documented, non-secret text.
+#
+# The default rules are kept. Each allowlist entry below is a literal string
+# that appears in documentation on purpose:
+#   * DEMO_SETUP §4.4 is a secret-scanner self-test. The value is fake; the
+#     pre-commit hook is what must block it, and that hook has its own rules.
+#   * The architecture doc shows an HTTP header example whose value is a UUID
+#     (an idempotency key), not an API credential.
+# Nothing here weakens detection of real credentials elsewhere.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented false positive: an idempotency-key header example whose value is a UUID."
+regexTarget = "match"
+regexes = [
+  '''Idempotency-Key: 0192f3a4-8c21-7d3e-9f10-2b4c6d8e0a1c''',
+]

@@ -1,0 +1,59 @@
+#!/usr/bin/env sh
+# =============================================================================
+# PRE-COMMIT SECRET SCAN — repository root.
+#
+# Install once per clone:
+#   npm run hooks:install      # git config core.hooksPath .husky
+# Verify: git config --get core.hooksPath   # -> .husky
+#
+# WHY THE ROOT: `git commit` runs hooks from the repository root's
+# core.hooksPath. A hook living only in backend/.husky never fires for a
+# dashboard or Flutter commit, so the scan would silently not exist.
+#
+# WHAT IT SCANS: staged Added/Copied/Modified/Renamed files, shape-based, so a
+# secret is caught even in comments, YAML or SQL:
+#   - Twilio SID / auth token and JWT_SECRET / METRICS_TOKEN assignments
+#   - long base64 blobs (Firebase service-account JSON bodies)
+#   - Firebase FCM server keys, Google API keys, AWS access keys, JWTs
+#   - PEM private keys
+# Allowlisted: unset .env.example values, CHANGE-ME placeholders, the test
+# suite's fake credentials, and process.env.* reads (never literal secrets).
+# =============================================================================
+
+set -eu
+
+FILES=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$FILES" ] && exit 0
+
+ASSIGN_PATTERN='(JWT_SECRET|METRICS_TOKEN|TWILIO_AUTH_TOKEN|TWILIO_ACCOUNT_SID)[[:space:]]*=[[:space:]]*[^[:space:]]'
+BASE64_PATTERN='[A-Za-z0-9+/]{120,}={0,2}'
+JWT_PATTERN='eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}'
+AWS_PATTERN='AKIA[0-9A-Z]{16}'
+GOOGLE_PATTERN='AIza[0-9A-Za-z_-]{35}'
+GOOGLE_FCM_PATTERN='AAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{40,}'
+PEM_PATTERN='-----BEGIN [A-Z ]*PRIVATE KEY-----'
+
+# -I skips binary files (an icon or PNG should never fail the scan).
+SUSPECTS=$(printf '%s\n' $FILES | xargs grep -HnIE "$ASSIGN_PATTERN|$BASE64_PATTERN|$JWT_PATTERN|$AWS_PATTERN|$GOOGLE_PATTERN|$GOOGLE_FCM_PATTERN|$PEM_PATTERN" -- 2>/dev/null || true)
+
+if [ -n "$SUSPECTS" ]; then
+  ALLOWED=$(printf '%s\n' "$SUSPECTS" | grep -vE '(= *""|=\"\"|CHANGE-ME|test-auth-token|test-only-jwt-secret|hardening-test-metrics-token|ACtest|dev-only-secret-change-me|process\.env\.[A-Z_]+[[:space:]]*=|\[redacted\]|redact|secret scan|placeholder)' || true)
+
+  if [ -n "$ALLOWED" ]; then
+    echo >&2 ""
+    echo >&2 "============================================================"
+    echo >&2 "  🔒 PRE-COMMIT BLOCKED: secret-shaped content staged!"
+    echo >&2 "============================================================"
+    echo >&2 "$ALLOWED"
+    echo >&2 ""
+    echo >&2 "Fix: remove the secret from the staged file and move it to a"
+    echo >&2 "gitignored .env. If it already entered git history, ROTATE it —"
+    echo >&2 "deleting the file does not un-leak it."
+    echo >&2 ""
+    echo >&2 "(Emergency bypass: git commit --no-verify — audit what enters.)"
+    echo >&2 "============================================================"
+    exit 1
+  fi
+fi
+
+exit 0

@@ -1,0 +1,65 @@
+# =============================================================================
+# Monitoring stack: Prometheus + Alertmanager + Grafana (persistent volumes).
+#
+#   docker compose -f docker-compose.monitoring.yml up -d
+#
+#   Prometheus  : http://localhost:9090   (targets + alerts)
+#   Alertmanager: http://localhost:9093
+#   Grafana     : http://localhost:3000   (admin / admin)
+#
+# NOTE ON PORTS: Grafana takes :3000. The API intentionally does NOT use
+# 3000 (PM2 instances are 3001/3002/3003 by design), so there is no clash.
+#
+# host.docker.internal on LINUX: Docker Desktop provides it natively on
+# Windows/macOS; the extra_hosts entry ("host-gateway") reproduces it for a
+# bare Linux engine.
+# =============================================================================
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: hostel-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus       # persistent: rate() windows survive restarts
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '9090:9090'
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: hostel-alertmanager
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager   # persistent: silence/notification state
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '9093:9093'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: hostel-grafana
+    environment:
+      # Demo credentials. CHANGE per Grafana docs before showing anyone.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana     # persistent: pans, downloads, annotations
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '3000:3000'
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:

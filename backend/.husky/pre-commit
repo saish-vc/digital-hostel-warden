@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# Compatibility shim.
+#
+# The real scan lives at the REPOSITORY ROOT (.husky/pre-commit) because git
+# only runs hooks from core.hooksPath, which is set at the repo root. This
+# shim exists so a clone that still points core.hooksPath at backend/.husky
+# keeps working — one implementation, not two that can drift.
+#
+#   npm run hooks:install     # from the repo root, sets core.hooksPath=.husky
+set -eu
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+if [ -z "$ROOT" ] || [ ! -f "$ROOT/.husky/pre-commit" ]; then
+  echo "secret-scan: repository-root hook not found; skipping (run npm run hooks:install)" >&2
+  exit 0
+fi
+
+exec sh "$ROOT/.husky/pre-commit" "$@"

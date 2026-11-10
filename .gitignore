@@ -1,0 +1,20 @@
+# Repository-root ignores. Each sub-project has its own .gitignore; this one
+# exists so a stray root-level artifact can never be committed.
+node_modules/
+dist/
+build/
+coverage/
+
+# Secrets: every real .env is local. Only the templates are committed.
+.env
+.env.*
+!.env.example
+!.env.test.example
+firebase-service-account.json
+*.pem
+*.p12
+
+*.log
+
+# Project-local k6 binary for load-test/sos.js (downloaded, not committed).
+.k6/

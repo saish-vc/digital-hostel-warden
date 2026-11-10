@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled URL used by the app (PgBouncer / Neon pooler / Railway).
+  // Include ?pgbouncer=true&connection_limit=5 when the URL points at
+  // PgBouncer in transaction mode; see .env.example.
+  url       = env("DATABASE_URL")
+  // Direct (non-pooled) URL used ONLY by prisma migrate / introspect.
+  // PgBouncer transaction mode cannot run migrations.
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+model Student {
+  id                String           @id @default(uuid())
+  name              String
+  email             String           @unique
+  passwordHash      String
+  roomNumber        String
+  emergencyContact  String
+  medicalConditions String?
+  alerts            EmergencyAlert[]
+}
+
+model Warden {
+  id                 String           @id @default(uuid())
+  name               String
+  email              String           @unique
+  passwordHash       String
+  hostelBlock        String
+  acknowledgedAlerts EmergencyAlert[]
+  deviceTokens       DeviceToken[]
+}
+
+/// One row per browser/device that a warden has granted notification
+/// permission from. The token is FCM's registration token; it is globally
+/// unique per browser profile, so a shared browser reassigns the row
+/// rather than creating a duplicate.
+model DeviceToken {
+  id         Int      @id @default(autoincrement())
+  wardenId   String
+  warden     Warden   @relation(fields: [wardenId], references: [id], onDelete: Cascade)
+  token      String   @unique
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  // Push fan-out looks up every token per warden on suspension/cleanup, and
+  // the delete-on-logout path filters by wardenId.
+  @@index([wardenId], map: "idx_device_tokens_warden")
+}
+
+model EmergencyAlert {
+  id                   String    @id @default(uuid())
+  studentId            String
+  student              Student   @relation(fields: [studentId], references: [id])
+  type                 String
+
+  // Full alert lifecycle. Valid transitions (enforced in alert.routes.ts):
+  //   PENDING      -> ACKNOWLEDGED  (PATCH /alerts/:id/acknowledge — warden)
+  //   PENDING      -> PENDING       (no-op; the worker's SMS escalation only
+  //                                    sends an SMS, it never changes status)
+  //   ACKNOWLEDGED -> RESOLVED      (PATCH /alerts/:id/resolve — warden,
+  //                                  requires resolutionNote >= 10 chars)
+  //   RESOLVED     -> RESOLVED      (re-resolve is idempotent, returns 200)
+  // Everything else is a 409 invalid_transition. Status is deliberately a
+  // plain string (no DB enum): the transition rules live in application code
+  // where they are testable, and adding RESOLVED required NO migration of an
+  // enum type — only the resolvedAt column below was added.
+  status               String    @default("PENDING")
+  latitude             Float?
+  longitude            Float?
+  locationAccuracy     Float?
+  createdAt            DateTime  @default(now())
+  acknowledgedAt       DateTime?
+  acknowledgedBy       String?
+  acknowledgedByWarden Warden?   @relation(fields: [acknowledgedBy], references: [id])
+  resolvedAt           DateTime?
+  resolutionNote       String?
+
+  // The warden board's hot query:
+  //   WHERE status = 'PENDING' ORDER BY created_at DESC
+  // Without this composite index it becomes a full scan + sort as alert
+  // history grows (500 students, demo day). DESC matches the query's sort.
+  @@index([status, createdAt(sort: Desc)], map: "idx_alerts_status_created")
+
+  // "All alerts for this student" (student history / active alert lookup).
+  @@index([studentId], map: "idx_alerts_student")
+}

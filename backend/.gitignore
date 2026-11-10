@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.test
+*.log
+
+# Firebase service-account JSON must never be committed; the base64 form lives
+# in FIREBASE_SERVICE_ACCOUNT_B64 in the gitignored .env.
+firebase-service-account.json
+*.pem

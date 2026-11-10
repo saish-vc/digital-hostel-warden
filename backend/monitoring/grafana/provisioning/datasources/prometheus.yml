@@ -1,0 +1,16 @@
+# Grafana data source — provisioned so the dashboard is usable the moment
+# docker compose -f docker-compose.monitoring.yml up -d finishes, with zero
+# UI clicks (spec requirement).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus            # dashboards/hostel.json targets this uid
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090  # service name on the compose network
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: '15s'        # matches scrape_interval — Grafana stops
+                                 # suggesting finer-than-possible steps

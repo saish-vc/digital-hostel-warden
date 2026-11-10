@@ -1,0 +1,127 @@
+# =============================================================================
+# PROMETHEUS ALERT RULES — the "is it broken at 2am?" answer.
+#
+# Rules eval every 15s. When one fires, Prometheus pushes the alert to
+# Alertmanager (alerting: block in prometheus.yml), which routes it to the
+# generic webhook receiver (monitoring/alertmanager.yml).
+#
+# Priority is ordered deliberately: the first two are the system's SAFETY
+# GUARANTEE (escalation SMS + delivery channel); the rest are situational.
+# Panels and severity anchors: bullmq_jobs{state="failed"} is the single
+# most important series in the system — comments below explain WHY.
+# =============================================================================
+
+groups:
+  - name: hostel-emergency-critical
+    rules:
+      # -------------------------------------------------------------------------
+      # THE MOST IMPORTANT ALERT IN THIS SYSTEM.
+      #
+      # bullmq_jobs{state="failed"} is a gauge refreshed every 15s from
+      # queue.getJobCounts(). removeOnFail keeps the last 100 failed jobs,
+      # so a failing worker (SMS credentials broken, Twilio outage, Redis
+      # misconfig) accumulates failed state persistently. A rate > 0.1/s
+      # (≈6 failures/min sustained) for 10 minutes means escalations are
+      # failing WHILE STUDENTS ARE STILL ALONE WITH A MEDICAL EVENT — i.e.
+      # our "nobody answers in 60s -> SMS" promise is silently broken.
+      #
+      # Without this alert the failure mode is invisible: API instances
+      # stay /health-healthy (Redis and Postgres are fine; it is the
+      # DELIVERY that is dead), the dashboard keeps showing alerts, and
+      # nobody knows no SMS went out.
+      # -------------------------------------------------------------------------
+      - alert: EscalationFailuresHigh
+        expr: rate(bullmq_jobs{state="failed"}[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Escalation SMS jobs are failing — the 60s safety net is broken'
+          description: >-
+            bullmq_jobs{state="failed"} rose above 0.1/s (sustained 10m).
+            Inspect BullMQ failed jobs (bullmq panel #1) and the worker logs:
+            `pm2 logs worker --lines 200`. Common causes: invalid
+            TWILIO_* credentials (error 21606/21608), unverified
+            WARDEN_ONCALL_PHONE on a trial account, Redis dropped below
+            noeviction, or the worker process died silently.
+
+      # -------------------------------------------------------------------------
+      # SMS delivery rate (success / total over 10m) below 80% — catches a
+      # HALF-broken channel the failed-jobs gauge can miss: retries make
+      # individual attempts "succeed" eventually, but a channel stuck
+      # around the retry cliff exits the 100% regime and lands here.
+      # Break-glass SOS: alerts can be still created and pushed while SMS
+      # quietly degrades below 80% — this alert is the backstop.
+      # -------------------------------------------------------------------------
+      - alert: SMSSuccessRateLow
+        expr: >-
+          sum(rate(sms_sent_total{status="success"}[10m]))
+          /
+          sum(rate(sms_sent_total[10m])) < 0.8
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Twilio escalation SMS success rate has dropped below 80%'
+          description: >-
+            sum(rate(sms_sent_total{status="success"}[10m])) /
+            sum(rate(sms_sent_total[10m])) < 0.8 for 10 minutes. Twilio
+            delivery is degraded (quota, provider outage, rate limiting).
+            Verify Twilio console + sms.service retry logs.
+
+      # -------------------------------------------------------------------------
+      # A warden dashboard WITHOUT a single healthy Socket.IO connection.
+      # Might just be nighttime (warning, not critical) — but a p95 of +
+      # 3 min with no wardens looking is worth a look before the next
+      # student page. PromQL: max across instances equals 0 (all empty).
+      # -------------------------------------------------------------------------
+      - alert: NoWardensConnected
+        expr: max(socket_io_connected) == 0 or absent(socket_io_connected)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'No warden Socket.IO connections anywhere for 5 minutes'
+          description: >-
+            socket_io_connected == 0 on every instance. Either nobody has
+            the dashboard open (common at night) or something on the
+            socket path is broken (auth/CORS/handshake). Check warden
+            dashboard logs for reconnect errors.
+
+      # -------------------------------------------------------------------------
+      # SOS surge. 0.5/s (30/min) sustained over 5m is impossible for a
+      # broken button — one student is capped at 5/60s by sosLimiter.
+      # This is either a real mass event (corridor fire, food poisoning)
+      # or abuse / a script. The break-glass override makes a stuck
+      # button SURVIVE risk: this alert is what catches the surge.
+      # -------------------------------------------------------------------------
+      - alert: HighSOSRate
+        expr: sum(rate(alerts_created_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'SOS rate above 0.5/s — possible mass event or abuse'
+          description: >-
+            sum(rate(alerts_created_total[5m])) > 0.5 for 5 minutes.
+            Correlate with alerts_by_status and sos_overrides_total.
+            Check the surviving alerts' types: a FIRE/SECURITY mix means
+            treat it as a real event, not noise.
+
+      # -------------------------------------------------------------------------
+      # A scraped target is gone (up==0). Fires only for known jobs —
+      # stops the "was that instance ever green?" confusion when someone
+      # restarts PM2 without escalating SOL err codes.
+      # -------------------------------------------------------------------------
+      - alert: InstanceDown
+        expr: up{job=~"api|worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Prometheus cannot scrape {{ $labels.instance }} ({{ $labels.job }})'
+          description: >-
+            up{job="{{ $labels.job }}", instance="{{ $labels.instance }}"} == 0
+            for over a minute. The instance is unreachable or /metrics is
+            rejecting the scrape (token mismatch — compare METRICS_TOKEN in
+            backend/.env against monitoring/prometheus.yml).
