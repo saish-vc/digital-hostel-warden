@@ -9,18 +9,25 @@ found four steps that could not be performed as written, and the corrections plu
 their evidence do not fit on two pages.)
 
 > **Rewritten 2026-11-09 after the 2026-11-08 dry run
-> (`docs/DRY_RUN_REPORT.md`).** Every step below carries the drill ID that
-> verifies it. Steps that need Twilio, FCM or nginx are marked
-> **PRODUCTION DEPLOYMENT ONLY** and are *not* performed on stage — those
-> integrations are unconfigured in this environment. Set them up with
-> `docs/DEMO_SETUP.md` first if you want them live.
+> (`docs/DRY_RUN_REPORT.md`) and updated 2026-11-10 after the fixes.**
+> Every step below carries the drill ID that verifies it. Steps that need
+> Twilio or FCM are marked **PRODUCTION DEPLOYMENT ONLY** and are *not*
+> performed on stage — those integrations are unconfigured in this
+> environment. Set them up with `docs/DEMO_SETUP.md` first if you want them
+> live. nginx **is** running here; it is part of the demo topology.
 >
 > **Environment this script assumes:** PM2 `api` ×3 (3001/3002/3003) + `worker`
-> ×1; containers `backend-postgres-1` and `backend-redis-1`; Prometheus :9090,
-> Grafana :3000, Alertmanager :9093; dashboard on :5173 pinned to
-> `VITE_API_URL=http://localhost:3001`; `ESCALATION_DELAY_MS=60000`;
+> ×1; nginx 1.31.8 on **:8080** fronting those three instances; containers
+> `backend-postgres-1` and `backend-redis-1`; Prometheus :9090, Grafana :3000,
+> Alertmanager :9093; dashboard on :5173 pinned to
+> `VITE_API_URL=http://localhost:8080`; `ESCALATION_DELAY_MS=60000`;
 > `INTERNAL_API_URL=http://localhost:3001` (the worker's result relay — without
 > it the escalation pill cannot report the truth).
+>
+> **Why the proxy matters:** the dashboard and the app talk to :8080. nginx
+> round-robins REST requests and pins each WebSocket to one instance at connect
+> time, so no sticky session is needed. If an API instance dies, the proxy
+> ejects it and the dashboard reconnects elsewhere (drills F3/F4).
 
 ---
 
@@ -35,6 +42,11 @@ cd backend
 npm run test:db:up                        # backend-postgres-1 + backend-redis-1
 docker compose -f docker-compose.monitoring.yml up -d
 npx pm2 start ecosystem.config.js         # api ×3 + worker ×1  ← BEFORE the reset
+
+# front door — keep this terminal open (daemon mode dies with the shell here)
+$prefix = (Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory -Filter 'nginxinc*' | Select-Object -First 1).FullName + '\nginx-1.31.8'
+nginx -p $prefix -c "$PWD\nginx.conf" -g "daemon off;"
+
 npm run demo:reset                        # 0 active, 3 resolved, queue flushed, counters zeroed
 cd ../warden-dashboard && npm run dev     # :5173
 ```
@@ -44,12 +56,13 @@ from your own shell, not from inside a PM2 env. Expected tail:
 `0 active alerts, 3 resolved, …` and
 `[demo-reset] restarted api + worker — Prometheus counters zeroed`.
 
-- [ ] `curl -s localhost:3001/health` → `{"status":"ok","instanceId":"3001",...}` (**F1**)
-- [ ] Repeat for 3002 / 3003 — three different `instanceId`s. (**F1**)
+- [ ] `curl -s localhost:8080/health` → `{"status":"ok","instanceId":"30xx",...}` (**F1**)
+- [ ] Repeat six times; the `instanceId` cycles 3001 → 3002 → 3003. That is
+      nginx round-robin, not PM2 sharing. (**F1**, **F4**)
 - [ ] Prometheus `:9090/targets` → **4/4 up** (api ×3 + worker). (**H5**)
-      If `:3001` is down, check for another container publishing that port —
-      `docker ps --format '{{.Names}} {{.Ports}}'`. A shadowing container makes
-      Prometheus scrape the wrong process and every panel lies.
+      If one API target is down, check for another container publishing that
+      port — `docker ps --format '{{.Names}} {{.Ports}}'`. A shadowing
+      container makes Prometheus scrape the wrong process and every panel lies.
 - [ ] Grafana `:3000` → dashboard **Hostel Emergency** (uid `hostel-emergency`,
       the *unconfigured* variant). Panel 1 reads **0**, not "No data". (**H1**)
 - [ ] **Click the "Active" tab.** The filter persists in `localStorage`, so a
@@ -249,23 +262,32 @@ Grafana, dashboard **Hostel Emergency** (uid `hostel-emergency`), in this order:
 
 ## 5:45 — Multi-instance proof (45s)
 
-1. `for p in 3001 3002 3003; do curl -s localhost:$p/health; done` → three
-   different `instanceId`s. (**F1**)
-2. Say: *"Sockets are WebSocket-only, so no sticky sessions are needed. The
-   Redis adapter broadcasts alert events across all three instances — measured
-   at 140/144 ms, and the automated test asserts under 500 ms."* (**F2**, **L2**)
-3. Say: *"In production, nginx sits in front of the 3 instances — we've tested
-   cross-instance broadcast via the Redis adapter (F1/F2 pass). Instance
-   failover requires nginx and is a production deployment verification step,
-   not a local dry-run step."*
+1. `for i in 1 2 3 4 5 6; do curl -s localhost:8080/health; done` → the
+   `instanceId` cycles through `3001`, `3002`, `3003`. (**F1**)
+2. Say: *"Sockets are WebSocket-only, so no sticky sessions are needed. nginx
+   pins each socket to one instance; the Redis adapter broadcasts alert events
+   across all three — measured at 15/17 ms, and the automated test asserts
+   under 500 ms."* (**F2**, **L2**)
+3. Say: *"The proxy also removes a dead instance. We tested stopping two of the
+   three API processes: the dashboard stayed Live, its sockets reconnected to
+   the survivor, and a POST through :8080 still returned 201."* (**F3**, **F4**)
 
-**Do not kill an API instance on stage.** There is no load balancer in this
-environment: the dashboard is pinned to one port, so it stays `Disconnected`
-until that instance comes back, and traffic posted to the dead port does not
-fail over (dry-run drills **F3/F4**, reframed as **PRODUCTION DEPLOYMENT ONLY**).
-Killing `pm2 stop api --only 0` would demonstrate a missing deployment component,
-not a system fault. `backend/nginx.conf` is the artifact for that deployment; it
-is deliberately not run here.
+**Failover is a rehearsed optional step, not part of the 7-minute run.** If you
+want to show it:
+
+```bash
+# map PM2 ids to instances once, before the demo
+npx pm2 list
+npx pm2 stop <id1> <id2>     # leave one api + worker running
+curl -s localhost:8080/health            # 200, survivor's instanceId
+# dashboard: Live; sockets move to the survivor (socket_io_connected)
+npx pm2 start <id1> <id2>                # restore; LB distribution returns
+```
+
+Do not stop the **worker** in this step — that is the separate E5 drill. If you
+are short on time, skip the failover demo entirely; the dashboard going
+`Reconnecting` on stage is normal Socket.IO behaviour, but it costs seconds you
+may not have.
 
 ---
 
@@ -275,10 +297,10 @@ is deliberately not run here.
 
 ```bash
 docker stop backend-redis-1        # the container the dry run used — see the note below
-# raise SOS  -> HTTP 201 in 31-151 ms, card still appears on the dashboard
-curl -s localhost:3001/health      # 200 {"status":"degraded","redis":"down","db":"ok"}
-curl -s -o /dev/null -w '%{http_code}\n' localhost:3001/health/ready   # 503
-docker start backend-redis-1       # recovers on its own in ~30-60 s, no API restart
+# raise SOS  -> HTTP 201 in ~11-15 ms, row persisted in Postgres
+curl -s localhost:8080/health      # 200 {"status":"degraded","redis":"down","db":"ok"}
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/health/ready   # 503
+docker start backend-redis-1       # recovers on its own in ~35 s, no API restart
 ```
 
 > **Which Redis container?** This machine has **two**: `backend-redis-1`
@@ -293,18 +315,22 @@ docker start backend-redis-1       # recovers on its own in ~30-60 s, no API res
 
 Say exactly this:
 
-> *"With Redis down the SOS still lands in Postgres and still reaches the
-> dashboard in well under 200 milliseconds — we measured six requests at 31 to
-> 151 ms. The rate limiter fails open rather than blocking the emergency, and
-> the health endpoint honestly reports `degraded`. What you lose is the
-> escalation timer and cross-instance fan-out, because both of those transport
-> over Redis. They resume when it comes back."*
+> *"With Redis down the SOS still lands in Postgres and the API still answers in
+> eleven to fifteen milliseconds — we measured six requests. The rate limiter
+> fails open rather than blocking the emergency, and the health endpoint
+> honestly reports `degraded`. What you lose is escalation and real-time
+> fan-out, because both transport over Redis. They resume when it comes back."*
 
-**Do not say "still realtime everywhere".** Measured during the outage: a warden
-on the **same** instance got `alert:new` in **~16 ms**; a warden on a **different**
-instance got it **77 s late**, ~2 s after Redis returned. The dashboard here is
-pinned to `:3001` and the SOS goes to `:3001`, so the card you see on stage is the
-same-instance path. (Dry-run **D3** evidence; `progress.md` §4, guarantee #3.)
+**Do not say "still realtime everywhere".** During the outage the dashboard may
+be connected to a different instance than the one that accepted the SOS, and
+cross-instance delivery waits for Redis: V1 measured a different-instance
+warden receiving the event **77 s late**, about 2 s after Redis returned. The
+alert is never lost — it is in Postgres and appears on refresh or on recovery —
+but the live card is not guaranteed while Redis is down. This is guarantee #3's
+documented scope.
+
+**Do this drill last**, or skip it if the demo is running long. It is the one
+drill whose visual result depends on which instance the socket landed on.
 
 **Never gate the SOS on `/health/ready`.** It returns 503 by design while Redis
 is down; that is a readiness signal for a load balancer, not a permission slip
@@ -339,12 +365,12 @@ the filter persists in `localStorage` and the next presenter inherits it.
 
 | Question | Answer |
 | --- | --- |
-| Why 3 instances? | Cross-instance fan-out via the Redis adapter, plus rolling restarts. Load balancing and instance failover need nginx in front — production-only, not run locally. |
+| Why 3 instances? | Cross-instance fan-out via the Redis adapter, rolling restarts, and real failover behind nginx. Stop one instance and the dashboard reconnects to another; POSTs through :8080 still succeed. |
 | Why not cluster the worker? | Two consumers can double-send SMS; needs a lock. Deliberate. |
-| What if Redis dies? | SOS still returns **201 in <200 ms** (measured 31–151 ms) and reaches wardens on the same instance in ~16 ms. Escalation and cross-instance fan-out pause and resume on recovery. `/health` says `degraded`, `/health/ready` says 503 — neither blocks the SOS. |
+| What if Redis dies? | SOS still returns **201 in 11–15 ms** and the alert is persisted; `/health` says `degraded`, `/health/ready` says 503 — neither blocks the SOS. Escalation and cross-instance fan-out pause and resume on recovery; the live card is not guaranteed until then. |
 | What if FCM fails? | Push is fire-and-forget; the socket path is primary; stale tokens are deleted on the next send. **Unit-proven only** — Firebase is unconfigured here, so no real device has exercised it (`docs/DEMO_SETUP.md` §2). |
 | Why does the pill say "Escalation failed"? | Because the worker's Twilio send genuinely failed — no credentials in this environment. The pill reports the worker's receipt, not a client-side timer. That is the fix, not a bug. |
 | Can a student be rate-limited out of sending an SOS? | No. Over 5 SOS/60s the limiter **allows the request through**, logs `sos_rate_limit_overridden` and increments `sos_overrides_total`. We prefer a 7th push over a silently dropped emergency. (**G2**) |
 | Why plain-string status? | Transition rules live in testable app code; adding RESOLVED needed no enum migration. |
-| Why a Seq Scan in the history query? | The planner's choice at demo row counts, not a missing index. Forced `enable_seqscan=off` uses the index; at 5,023 rows the planner picks it unforced. Measured plans are in `alert.routes.ts:475-533`. (**J4**) |
-| Is the SMS number committed? | No — `WARDEN_ONCALL_PHONE` env only. The root `.husky/pre-commit` scanner blocks secret-shaped content, but **this tree is not a git repository yet**, so the hook cannot fire until `git init` + `npm run hooks:install` (`docs/DEMO_SETUP.md` §4). |
+| Why a Seq Scan in the history query? | The planner's choice at demo row counts, not a missing index. Forced `enable_seqscan=off` uses an index; at 5,003 rows the planner picks `idx_alerts_status_created` unforced (3×, one per UNION branch, 0.607 ms). Measured plans are in `alert.routes.ts:475-533`. (**J4**) |
+| Is the SMS number committed? | No — `WARDEN_ONCALL_PHONE` env only. The root `.husky/pre-commit` scanner blocks secret-shaped content; git history is initialized and gitleaks reports **0 findings** (`docs/DEMO_SETUP.md` §4). |

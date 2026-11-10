@@ -27,8 +27,8 @@ Verified by inspection, not assumed:
 | FCM (dashboard) | `.env` holds `TEST-KEY` / `test-project` placeholders | Service worker initialises against a non-existent project |
 | Firebase SDK version | `firebase@13.2.0` in `package.json`; `importScripts` pinned to `13.2.0` | **Already matches** — re-check only after an upgrade |
 | Android tooling | `flutter` on PATH; `adb` **not** on PATH; no AVD | C4/C5 SKIP |
-| Git | **No `.git` directory** | I2/I3 SKIP; the pre-commit hook cannot fire |
-| Secret scanner | `.husky/pre-commit` exists at the repo root; `backend/.husky/pre-commit` is a shim that delegates to it | Ready to install — see §4 |
+| Git | Initialized; baseline commit `1083575`; `core.hooksPath=.husky` | I2/I3 now runnable; every commit is scanned |
+| Secret scanner | `.husky/pre-commit` (repo root) + `gitleaks 8.30.1` + `.gitleaks.toml` | Staged and full-history scans: **0 findings** |
 | Grafana | Both variants provisioned | Load **variant A** until §1 and §2 are done |
 
 **Port map — the single most common setup mistake.** `backend/src/config/instance.ts`
@@ -38,12 +38,44 @@ resolves the port in this order: explicit `PORT` → `NODE_APP_INSTANCE`
 | How you run the API | Port(s) | What clients must use |
 |---|---|---|
 | `npm run dev` (single instance) | `4000` | `http://localhost:4000` |
-| `pm2 start ecosystem.config.js` (demo topology) | `3001`, `3002`, `3003` | `http://localhost:3001` |
+| `pm2 start ecosystem.config.js` (API topology) | `3001`, `3002`, `3003` | direct only: `http://localhost:3001` |
+| PM2 + nginx (the demo topology) | nginx `8080` → `3001/3002/3003` | `http://localhost:8080` |
 
 The Flutter app defaults to `http://10.0.2.2:4000`
 (`student_app/lib/services/api.dart:11`). That is correct for `npm run dev`
-and **wrong for the PM2 demo topology** — nothing listens on 4000 there. See
-§3.3.
+and **wrong for the PM2/nginx demo topology** — clients must use the proxy on
+`8080`. See §3.3.
+
+### 0.1 Start the reverse proxy (F3/F4)
+
+nginx 1.31.8 is installed via `winget` (`nginxinc.nginx`). The repository file
+`backend/nginx.conf` is authoritative: round-robin upstream over
+`3001/3002/3003`, WebSocket upgrade on `/socket.io/`, passive ejection of a
+dead instance (`max_fails=3 fail_timeout=10s`), and `proxy_next_upstream` for
+REST. Clients are WebSocket-only, so no sticky session is needed.
+
+- [ ] Start it in a dedicated terminal (keep the terminal open):
+
+```powershell
+$prefix = (Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory -Filter 'nginxinc*' | Select-Object -First 1).FullName + '\nginx-1.31.8'
+nginx -p $prefix -c "$PWD\backend\nginx.conf" -g "daemon off;"
+```
+
+- [ ] Verify round-robin (expect the three ids to repeat):
+
+```powershell
+1..6 | ForEach-Object { (curl.exe -s http://localhost:8080/health | ConvertFrom-Json).instanceId }
+```
+
+- [ ] Point the dashboard at the proxy: `warden-dashboard/.env` →
+      `VITE_API_URL="http://localhost:8080"`, then restart Vite.
+- [ ] F3/F4 acceptance: stop one API instance (`pm2 stop <id>`), confirm the
+      dashboard returns to `Live` and `POST /alerts` through `8080` still
+      returns `201`. Restart it with `pm2 start <id>`.
+
+> The proxy is **not** a production TLS terminator here; this is a plain HTTP
+> listener on `localhost:8080`. TLS and a public hostname remain production
+> work (see `docs/FUTURE_WORK.md`).
 
 ---
 
@@ -66,8 +98,8 @@ and **wrong for the PM2 demo topology** — nothing listens on 4000 there. See
 
 ```dotenv
 SMS_PROVIDER=twilio
-TWILIO_ACCOUNT_SID="AC..."
-TWILIO_AUTH_TOKEN="..."
+TWILIO_ACCOUNT_SID="CHANGE-ME"
+TWILIO_AUTH_TOKEN="CHANGE-ME"
 TWILIO_FROM_NUMBER="+1..."          # your Twilio sending number, E.164
 WARDEN_ONCALL_PHONE="+91..."        # the real on-call phone, E.164
 ```
@@ -299,7 +331,7 @@ for the host, which is correct; **the port is only correct for `npm run dev`.**
 
 ```bash
 cd student_app
-flutter run --dart-define=API_URL=http://10.0.2.2:3001
+flutter run --dart-define=API_URL=http://10.0.2.2:8080
 ```
 
 - [ ] If the API runs via **`npm run dev`**, the default is already right:
@@ -312,7 +344,7 @@ flutter run
       whichever port the API is on:
 
 ```bash
-flutter run --dart-define=API_URL=http://192.168.1.20:3001
+flutter run --dart-define=API_URL=http://192.168.1.20:8080
 ```
 
 *Expected:* the login screen accepts `aarav@hostel.local / password123`. If it
@@ -350,18 +382,29 @@ Work through `docs/MANUAL_TESTS.md` §2 in full. Summary of what to capture:
 
 ## 4. Git init and the secret scan — unblocks I2 and I3
 
-There is no `.git` directory, so I2 ("no secrets in git history") and I3
-("no untracked secret files / `.env` ignored") were SKIP.
+**Status: DONE on this tree.** The repository is initialized, the hook is
+active, and both the staged and full-history scans report **0 findings**.
+Re-run the checks below after any change that adds files.
 
-### 4.1 Initialise
+### 4.1 Initialise (already executed — repeat only for a fresh clone)
 
-- [ ] From the repository root:
+- [x] From the repository root:
 
 ```bash
 git init
 git config core.hooksPath .husky     # or: npm run hooks:install
 git config --get core.hooksPath      # -> .husky
 ```
+
+- [x] Baseline commit: `1083575` (`baseline: verified phases 1-4 …`).
+- [x] Independent scanner installed: `winget install Gitleaks.Gitleaks`
+      → `gitleaks 8.30.1`, with the narrow allowlist in `.gitleaks.toml`.
+- [x] `gitleaks git --staged --config .gitleaks.toml` → **no leaks found**
+      (209 tracked files).
+- [x] `gitleaks git --config .gitleaks.toml` (full history) → **no leaks found**.
+- [x] `node backend/scripts/secret-scan-check.cjs` → **CLEAN — 0 hits**.
+- [x] `git ls-files` contains only `.env.example` / `.env.test.example`;
+      no real `.env`, `*.pem`, or Firebase service-account JSON is tracked.
 
 - [ ] **Do not `npm install husky` or `git-secrets`.** Neither is a dependency
       of this project, and neither is needed: the repository ships its own
@@ -393,7 +436,7 @@ git config --get core.hooksPath      # -> .husky
       attempt a commit:
 
 ```bash
-printf 'TWILIO_AUTH_TOKEN=probe-value\n' > secret-probe.txt
+printf 'TWILIO_%s=probe-value\n' AUTH_TOKEN > secret-probe.txt
 git add secret-probe.txt
 git commit -m "probe: should be blocked"
 ```
