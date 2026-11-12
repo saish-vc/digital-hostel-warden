@@ -20,7 +20,7 @@ index test skipped by default). V1 was a 66-drill dry run with **47 PASS /
 since been fixed and verified: E6 fail-open SOS path, Resolve UI, new-alert
 banner, server-driven escalation pill, J4 index claim, H1 Grafana panels,
 Grafana metric reset, and F3/F4 via a real nginx front door. V2 is
-**54 PASS / 0 FAIL / 11 SKIP / 1 N/A → GO**, with the caveats in §7 and §8.
+**56 PASS / 0 FAIL / 9 SKIP / 1 N/A → GO**, with the caveats in §7 and §8.
 
 ---
 
@@ -30,9 +30,9 @@ Grafana metric reset, and F3/F4 via a real nginx front door. V2 is
 
 | | V1 (2026-11-08) | V2 (2026-11-10) |
 |---|---|---|
-| PASS | 47 | **54** |
+| PASS | 47 | **56** |
 | FAIL | 7 | **0** |
-| SKIP | 11 | 11 |
+| SKIP | 11 | **9** |
 | N/A | 1 | 1 |
 | Total | 66 | 66 |
 | Verdict | **NO-GO** | **GO** |
@@ -45,7 +45,7 @@ Full per-drill tables, actual outputs and the `Delta from V1` column:
 
 | ID | V1 symptom | Fix | V2 evidence |
 |---|---|---|---|
-| **E6** | Redis down → SOS hung, HTTP 000 after 5/10 s | Limiters `passOnStoreError: true` + 50 ms fail-fast store command; fire-and-forget enqueue; `/health` 200 `degraded` | Redis stopped: 6× `POST /alerts` → **201 in 11–15 ms**; `/health` 200 `{"status":"degraded","redis":"down","db":"ok"}`; `/health/ready` 503; recovery ~35 s, no API restart |
+| **E6** | Redis down → SOS hung, HTTP 000 after 5/10 s | Limiters `passOnStoreError: true` + 50 ms fail-fast store command; fire-and-forget enqueue; `/health` 200 `degraded` | Redis stopped: 6× `POST /alerts` → **201 in 44.7–73.3 ms** (API side; 150–211 ms browser round trip); `/health` 200 `{"status":"degraded","redis":"down","db":"ok"}`; `/health/ready` 503; recovery in **2.4–3.2 s**, no API restart |
 | **K6** | Demo script could not be performed as written | Real Resolve UI, new-alert banner, server-driven pill, honest Redis/index wording | Full script run: every step performed as written; pill never said "SMS sent" on a failed worker send |
 | **K7** | Same script, second run | Same | Second full run: same steps, same verdicts |
 | **F3** | No LB; dashboard stayed `Disconnected` when its instance died | nginx 1.31.8 front door on **:8080**, round-robin over 3001/3002/3003, WebSocket upgrade | Two instances stopped: dashboard stayed `Live`; sockets moved to the survivor (`3003=2`) |
@@ -71,7 +71,7 @@ Full per-drill tables, actual outputs and the `Delta from V1` column:
    Verified both branches: relay → `SMS SENT`; real 60 s worker failure
    (`SMS is not configured`) → `⚠️ ESCALATION FAILED`.
 
-### The 11 SKIPs (environment-limited, reasoned)
+### The 9 SKIPs (environment-limited, reasoned) + 1 N/A
 
 - **No Android emulator:** C4/C5 (permission states).
 - **FCM unconfigured:** D1–D4, D6 (push drills).
@@ -207,9 +207,9 @@ Fix-specific decisions:
 |---|---|---|---|
 | 1 | Acknowledged alert never fires SMS | ✅ PASS | Ack removed the delayed job; no worker line for the alert after 70 s (E3/E4/E8) |
 | 2 | Worker restart doesn't lose a pending escalation | ✅ PASS | E5: job survived a 9.1 s outage and fired 60.091 s after creation; second run fired 3.3 s after restart |
-| 3 | **Redis outage doesn't break SOS delivery** | ✅ **PASS (scoped)** | Creation + persistence + same-instance broadcast hold: `POST /alerts` 201 in 11–15 ms, rows persisted, `/health` degraded. **Scope:** cross-instance fan-out pauses (measured 77 s late, arriving after Redis returned) because Redis pub/sub *is* that transport; escalation also pauses. FCM was never measured (unconfigured). Never phrase this as "realtime everywhere". |
+| 3 | **Redis outage doesn't break SOS delivery** | ✅ **PASS (scoped)** | Creation + persistence + same-instance broadcast hold: `POST /alerts` 201 in **44.7–73.3 ms** (API side; 150–211 ms browser round trip), rows persisted, `/health` degraded. **Scope:** cross-instance fan-out pauses (measured 77 s late, arriving after Redis returned) because Redis pub/sub *is* that transport; escalation also pauses. FCM was never measured (unconfigured). Never phrase this as "realtime everywhere". |
 | 4 | Student never blocked from SOS by rate limiting | ✅ PASS | 6th SOS → 201, `sos_overrides_total` 0→1, `sos_rate_limit_overridden` logged (G2); limiters fail open on Redis errors |
-| 5 | Cross-instance broadcast <500 ms (Redis healthy) | ✅ PASS | F2: 15/17 ms; Phase 2 probe: 4–8 ms; automated test asserts <500 ms |
+| 5 | Cross-instance broadcast <500 ms (Redis healthy) | ✅ PASS | F2: 15–55 ms across runs; Phase 2 probe: 4–8 ms; automated test asserts <500 ms |
 | 6 | Stale FCM token deleted on next send | ✅ PASS | Unit-proven with a mock; no real device (D1–D4/D6 SKIP) |
 | 7 | No secret in git history or logs | ✅ **VERIFIED** | gitleaks staged **0**, full history **0**; repo scanner CLEAN; only `.env.example` files tracked |
 
@@ -223,6 +223,7 @@ Guarantees #3 and #5 cannot both be absolute during a Redis outage. Say so.
 |---|---|---|
 | **SOS hangs when Redis is down** | Limiter fail-closed, awaited enqueue, or `/health` 503 | `passOnStoreError: true` + 50 ms race; fire-and-forget enqueue; `/health` 200 `degraded` |
 | **Grafana pipeline count is 3× the DB** | DB-wide gauge exported by every API instance, `sum by (status)` | `max by (status)` (fixed) |
+| **Grafana failed-jobs panel spikes after a job is acknowledged** | `increase()` over a gauge: removal looks like a rate jump | `max(bullmq_jobs{state="failed"})` — the current count (fixed 2026-11-11) |
 | **Grafana shows stale counters after reset** | Counters live in the process, not the DB | `demo:reset` restarts api + worker as its last step |
 | **Grafana ignores a dashboard edit** | UTF-8 **BOM** from PowerShell `Set-Content` → `invalid character 'ï'` | Save UTF-8 **without BOM**; check first bytes `123,10`; restart Grafana and read the provisioning log |
 | **Seq Scan on `EmergencyAlert` at demo size** | Planner choice, not a bug (the old comment claimed otherwise) | `npx tsx scripts/perf-seed.ts`; at 5,003 rows the planner picks the composite index unforced |
@@ -270,7 +271,7 @@ Guarantees #3 and #5 cannot both be absolute during a Redis outage. Say so.
 ## 10. What Comes After the Fixes
 
 1. `docs/DRY_RUN_REPORT_V2.md` with verdict **GO** — done; no originally-PASS
-   drill regressed (52 of the 54 PASSes include all 47 V1 PASSes, plus the
+   drill regressed (the 56 PASSes are all 47 V1 PASSes, plus I2/I3, plus the
    7 fixed FAILs).
 2. Phase 5 manual checklist — git done; Twilio/FCM/Android remain ~2 hours of
    console clicking, no code.
@@ -334,8 +335,9 @@ Suggested follow-ups (not implemented — recorded so they are not lost):
 9. "We load-tested with 500 students, 50 warden sockets, 100 SOS over 60
    seconds. p95 response was under 200 ms."
 10. "A Redis outage degrades escalation and cross-instance fan-out, but SOS
-    creation, persistence and receipt still succeed in 11–15 milliseconds —
-    verified by stopping Redis and measuring six requests."
+    creation, persistence and receipt still succeed in **44.7–73.3 ms on the API
+    side** (150–211 ms browser round trip) — verified by stopping Redis and
+    measuring six requests."
 
 Use #8 and #10 only because they are now measured; do not upgrade #10 to
 "realtime everywhere".

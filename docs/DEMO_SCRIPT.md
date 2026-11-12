@@ -141,7 +141,7 @@ Show the empty board: **"No active alerts"**, **Live** indicator green.
 
 1. Raise a **second** SOS from `diya@hostel.local`.
 2. **Do not acknowledge.** Let the countdown run out. The scheduler is accurate
-   to ~70 ms: measured fire at **60.06–60.07 s**. (**E2**, **K6/K7**)
+   to ~70 ms: measured fire at **60.135 s / 60.133 s** in the two V2 runs. (**E2**, **K6/K7**)
 3. Watch the pill and narrate what it actually proves:
    - `⏱ Ns` while the window runs,
    - `Escalation pending…` once it elapses and the worker has not reported yet,
@@ -266,7 +266,7 @@ Grafana, dashboard **Hostel Emergency** (uid `hostel-emergency`), in this order:
    `instanceId` cycles through `3001`, `3002`, `3003`. (**F1**)
 2. Say: *"Sockets are WebSocket-only, so no sticky sessions are needed. nginx
    pins each socket to one instance; the Redis adapter broadcasts alert events
-   across all three — measured at 15/17 ms, and the automated test asserts
+   across all three — measured at 15–55 ms across runs, and the automated test asserts
    under 500 ms."* (**F2**, **L2**)
 3. Say: *"The proxy also removes a dead instance. We tested stopping two of the
    three API processes: the dashboard stayed Live, its sockets reconnected to
@@ -297,10 +297,10 @@ may not have.
 
 ```bash
 docker stop backend-redis-1        # the container the dry run used — see the note below
-# raise SOS  -> HTTP 201 in ~11-15 ms, row persisted in Postgres
+# raise SOS  -> HTTP 201 in ~45-73 ms (API), row persisted in Postgres
 curl -s localhost:8080/health      # 200 {"status":"degraded","redis":"down","db":"ok"}
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/health/ready   # 503
-docker start backend-redis-1       # recovers on its own in ~35 s, no API restart
+docker start backend-redis-1       # recovers on its own in ~2-3 s, no API restart
 ```
 
 > **Which Redis container?** This machine has **two**: `backend-redis-1`
@@ -316,10 +316,12 @@ docker start backend-redis-1       # recovers on its own in ~35 s, no API restar
 Say exactly this:
 
 > *"With Redis down the SOS still lands in Postgres and the API still answers in
-> eleven to fifteen milliseconds — we measured six requests. The rate limiter
-> fails open rather than blocking the emergency, and the health endpoint
-> honestly reports `degraded`. What you lose is escalation and real-time
-> fan-out, because both transport over Redis. They resume when it comes back."*
+> forty-five to seventy-three milliseconds on the API side — we measured six
+> requests. The browser round trip adds overhead (150–211 ms in the dashboard
+> test). The rate limiter fails open rather than blocking the emergency, and the
+> health endpoint honestly reports `degraded`. What you lose is escalation and
+> real-time fan-out, because both transport over Redis. They resume when it
+> comes back."*
 
 **Do not say "still realtime everywhere".** During the outage the dashboard may
 be connected to a different instance than the one that accepted the SOS, and
@@ -367,7 +369,7 @@ the filter persists in `localStorage` and the next presenter inherits it.
 | --- | --- |
 | Why 3 instances? | Cross-instance fan-out via the Redis adapter, rolling restarts, and real failover behind nginx. Stop one instance and the dashboard reconnects to another; POSTs through :8080 still succeed. |
 | Why not cluster the worker? | Two consumers can double-send SMS; needs a lock. Deliberate. |
-| What if Redis dies? | SOS still returns **201 in 11–15 ms** and the alert is persisted; `/health` says `degraded`, `/health/ready` says 503 — neither blocks the SOS. Escalation and cross-instance fan-out pause and resume on recovery; the live card is not guaranteed until then. |
+| What if Redis dies? | SOS still returns **201 in 45–73 ms on the API side** (150–211 ms browser round trip) and the alert is persisted; `/health` says `degraded`, `/health/ready` says 503 — neither blocks the SOS. Escalation and cross-instance fan-out pause and resume on recovery; the live card is not guaranteed until then. |
 | What if FCM fails? | Push is fire-and-forget; the socket path is primary; stale tokens are deleted on the next send. **Unit-proven only** — Firebase is unconfigured here, so no real device has exercised it (`docs/DEMO_SETUP.md` §2). |
 | Why does the pill say "Escalation failed"? | Because the worker's Twilio send genuinely failed — no credentials in this environment. The pill reports the worker's receipt, not a client-side timer. That is the fix, not a bug. |
 | Can a student be rate-limited out of sending an SOS? | No. Over 5 SOS/60s the limiter **allows the request through**, logs `sos_rate_limit_overridden` and increments `sos_overrides_total`. We prefer a 7th push over a silently dropped emergency. (**G2**) |

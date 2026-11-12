@@ -114,9 +114,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(bullmq_jobs{state=\"failed\"}[$__rate_interval]))",
+          "expr": "max(bullmq_jobs{state=\"failed\"})",
           "instant": false,
-          "legendFormat": "failed escalations (1h)",
+          "legendFormat": "failed escalations (current)",
           "range": true,
           "refId": "A"
         }
