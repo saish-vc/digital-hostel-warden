@@ -47,6 +47,11 @@ jobs:
 
     env:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hostel_emergency_test?schema=public
+      # schema.prisma declares directUrl = env("DIRECT_DATABASE_URL"), and the
+      # Prisma CLI validates the whole datasource block even for `migrate
+      # deploy`. Without this the migration step fails with P1012.
+      # CI has no PgBouncer, so direct = pooled.
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hostel_emergency_test?schema=public
       TEST_REDIS_URL: redis://localhost:6379/1
       JWT_SECRET: ci-only-test-secret-do-not-use-outside-ci
       ESCALATION_DELAY_MS: '500'
