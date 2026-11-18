@@ -1,5 +1,8 @@
 # HostelGuard — Handoff V3 (Post-Fix)
 
+> [!IMPORTANT]
+> **MASTER TASK LIST & ROADMAP:** See **[`PROJECT_ROADMAP.md`](file:///c:/Users/saish/OneDrive/Documents/Default%20Project/PROJECT_ROADMAP.md)** for the prioritized task breakdown of what has been built and what remains to be built for commercial production.
+
 > **Purpose:** continue the build without losing context. This supersedes the
 > pre-fix handoff. Every claim below was measured on this machine; the drill
 > evidence lives in `docs/DRY_RUN_REPORT_V2.md` and the raw console output is

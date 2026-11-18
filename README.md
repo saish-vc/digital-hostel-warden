@@ -1,5 +1,8 @@
 # HostelGuard — Hostel Emergency Response System
 
+> [!IMPORTANT]
+> **AI AGENT & DEVELOPER NOTICE:** Before starting any work or proposing changes, read **[`PROJECT_ROADMAP.md`](file:///c:/Users/saish/OneDrive/Documents/Default%20Project/PROJECT_ROADMAP.md)** first! It contains the master task list of what is built, what is to be built next in priority order, and non-negotiable architectural rules.
+
 A three-client emergency system for hostel campuses: a **Flutter student app**
 with one-tap SOS, a **React warden dashboard** for triage and resolution, and a
 **Node/Express + Socket.IO backend** with a Redis-backed escalation worker that
