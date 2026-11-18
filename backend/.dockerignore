@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+!.env.production.example
+*.log
+tests
+.husky
+.github
+*.test.ts
+*.spec.ts
+docker-compose*.yml
+Dockerfile*
+.dockerignore

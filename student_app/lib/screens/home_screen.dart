@@ -18,6 +18,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool _sending = false;
   _LocationStatus _locationStatus = _LocationStatus.ready;
+  String _selectedType = 'Medical';
 
   Future<void> _sendSos() async {
     setState(() {
@@ -36,7 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final alert = await ApiService.createAlert(
-        'Medical',
+        _selectedType,
         latitude: fix?.lat,
         longitude: fix?.lng,
         locationAccuracy: fix?.accuracy,
@@ -173,7 +174,30 @@ class _HomeScreenState extends State<HomeScreen> {
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white70),
                 ),
-                const SizedBox(height: 48),
+                const SizedBox(height: 24),
+                Wrap(
+                  spacing: 8,
+                  alignment: WrapAlignment.center,
+                  children: ['Medical', 'Fire', 'Security', 'Other'].map((type) {
+                    final selected = _selectedType == type;
+                    return ChoiceChip(
+                      label: Text(type),
+                      selected: selected,
+                      onSelected: _sending
+                          ? null
+                          : (val) {
+                              if (val) setState(() => _selectedType = type);
+                            },
+                      selectedColor: Colors.red.shade700,
+                      backgroundColor: const Color(0xFF1E293B),
+                      labelStyle: TextStyle(
+                        color: selected ? Colors.white : Colors.white70,
+                        fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 32),
                 GestureDetector(
                   onTap: _sending ? null : _sendSos,
                   child: AnimatedContainer(
@@ -207,12 +231,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 color: Colors.white,
                               ),
                             )
-                          : const Column(
+                          : Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.sos, size: 72, color: Colors.white),
-                                SizedBox(height: 8),
-                                Text(
+                                const Icon(Icons.sos, size: 72, color: Colors.white),
+                                const SizedBox(height: 8),
+                                const Text(
                                   'SOS',
                                   style: TextStyle(
                                     color: Colors.white,
@@ -222,8 +246,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                                 Text(
-                                  'Medical emergency',
-                                  style: TextStyle(
+                                  '$_selectedType emergency',
+                                  style: const TextStyle(
                                     color: Colors.white70,
                                     fontSize: 13,
                                   ),

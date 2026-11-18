@@ -866,8 +866,8 @@ class HistoryCsvStream extends Readable {
   private sentHeader = false;
 
   constructor(filters: HistoryFilters) {
-    // objectMode: we push whole CSV line strings.
-    super({ objectMode: true });
+    // encoding: utf8 allows pushing formatted string lines into byte/HTTP streams safely
+    super({ encoding: 'utf8' });
     this.filters = filters;
   }
 

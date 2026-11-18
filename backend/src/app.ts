@@ -27,6 +27,7 @@ import wardenRoutes from './routes/warden.routes';
 import healthRoutes from './routes/health.routes';
 import loadtestRoutes from './routes/loadtest.routes';
 import internalRoutes from './routes/internal.routes';
+import leaveRoutes from './routes/leave.routes';
 
 export interface AppBundle {
   app: express.Express;
@@ -238,6 +239,7 @@ export function createApp(): AppBundle {
   app.use('/auth', authRoutes);
   app.use('/alerts', alertRoutes);
   app.use('/wardens', wardenRoutes);
+  app.use('/leaves', leaveRoutes);
   // Narrow, secret-guarded cleanup door for load-test/sos.js (see the file).
   app.use('/loadtest', loadtestRoutes);
   // Worker -> socket layer relay (see the file for why the worker cannot emit).
@@ -325,9 +327,12 @@ export function createApp(): AppBundle {
     });
 
     // Connection metrics — Grafana's "Connected wardens" panel + the
-    // NoWardensConnected alert both read socket_io_connected.
+    // NoWardensConnected alert both read socket_io_connected. Only count WARDEN
+    // connections so students awaiting confirmation do not mask offline wardens.
     socketIoConnectionsTotal.inc({ role: user.role });
-    socketIoConnected.inc();
+    if (user.role === 'WARDEN') {
+      socketIoConnected.inc();
+    }
 
     logger.info(
       {
@@ -339,7 +344,9 @@ export function createApp(): AppBundle {
     );
 
     socket.on('disconnect', (reason) => {
-      socketIoConnected.dec();
+      if (user.role === 'WARDEN') {
+        socketIoConnected.dec();
+      }
       logger.info(
         {
           socketId: socket.id,

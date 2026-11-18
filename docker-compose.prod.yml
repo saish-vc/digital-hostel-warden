@@ -1,0 +1,194 @@
+# =============================================================================
+# HostelGuard — Production Docker Compose
+# =============================================================================
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml down
+#
+# This compose file is for self-hosted / VPS deployments. Cloud-managed
+# services (RDS, ElastiCache, etc.) should replace the postgres and redis
+# services — point DATABASE_URL and REDIS_URL at your managed instances.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — persistent data store
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hostel_emergency
+      POSTGRES_USER: ${POSTGRES_USER:-hostelguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hostelguard} -d hostel_emergency"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — Socket.IO adapter, BullMQ, rate limiting
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+        --maxmemory-policy noeviction
+        --appendonly yes
+        --appendfsync everysec
+        --requirepass ${REDIS_PASSWORD:-hostelguard-redis}
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-hostelguard-redis}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Database migrations (run once, then exit)
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    command: npx prisma migrate deploy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hostelguard}:${POSTGRES_PASSWORD:?err}@postgres:5432/hostel_emergency?schema=public
+      DIRECT_DATABASE_URL: postgresql://${POSTGRES_USER:-hostelguard}:${POSTGRES_PASSWORD:?err}@postgres:5432/hostel_emergency?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # API Server (scales horizontally)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hostelguard}:${POSTGRES_PASSWORD:?err}@postgres:5432/hostel_emergency?schema=public&connection_limit=5
+      DIRECT_DATABASE_URL: postgresql://${POSTGRES_USER:-hostelguard}:${POSTGRES_PASSWORD:?err}@postgres:5432/hostel_emergency?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-hostelguard-redis}@redis:6379
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://dashboard.hostelguard.com}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      ENABLE_HTTPS_REDIRECT: ${ENABLE_HTTPS_REDIRECT:-true}
+      METRICS_TOKEN: ${METRICS_TOKEN:?Set METRICS_TOKEN in .env}
+      FIREBASE_SERVICE_ACCOUNT_B64: ${FIREBASE_SERVICE_ACCOUNT_B64:-}
+      DASHBOARD_URL: ${DASHBOARD_URL:-}
+      INTERNAL_API_URL: http://api:3001
+      SMS_PROVIDER: ${SMS_PROVIDER:-twilio}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      WARDEN_ONCALL_PHONE: ${WARDEN_ONCALL_PHONE:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Escalation Worker (single instance — see ecosystem.config.js notes)
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/workers/escalation.worker.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hostelguard}:${POSTGRES_PASSWORD:?err}@postgres:5432/hostel_emergency?schema=public&connection_limit=5
+      DIRECT_DATABASE_URL: postgresql://${POSTGRES_USER:-hostelguard}:${POSTGRES_PASSWORD:?err}@postgres:5432/hostel_emergency?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-hostelguard-redis}@redis:6379
+      METRICS_TOKEN: ${METRICS_TOKEN:?Set METRICS_TOKEN in .env}
+      WORKER_METRICS_PORT: 4001
+      INTERNAL_API_URL: http://api:3001
+      SMS_PROVIDER: ${SMS_PROVIDER:-twilio}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      WARDEN_ONCALL_PHONE: ${WARDEN_ONCALL_PHONE:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # Leave-Overdue Worker (single instance — marks DEPARTED → OVERDUE)
+  # ---------------------------------------------------------------------------
+  leave-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/workers/leave-overdue.worker.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hostelguard}:${POSTGRES_PASSWORD:?err}@postgres:5432/hostel_emergency?schema=public&connection_limit=5
+      DIRECT_DATABASE_URL: postgresql://${POSTGRES_USER:-hostelguard}:${POSTGRES_PASSWORD:?err}@postgres:5432/hostel_emergency?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-hostelguard-redis}@redis:6379
+      METRICS_TOKEN: ${METRICS_TOKEN:?Set METRICS_TOKEN in .env}
+      LEAVE_WORKER_METRICS_PORT: 4002
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # Nginx — TLS termination + load balancing
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local

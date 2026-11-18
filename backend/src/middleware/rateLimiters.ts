@@ -243,6 +243,7 @@ export function createSocketHandshakeLimiter(
   windowMs = 60_000,
 ): (socket: Socket, next: (err?: Error) => void) => void {
   const hits = new Map<string, number[]>();
+  let lastGc = 0;
 
   return (socket, next) => {
     if (!isRateLimitingEnabled()) {
@@ -252,13 +253,16 @@ export function createSocketHandshakeLimiter(
 
     const now = Date.now();
 
-    // Cheap opportunistic GC of stale windows (no timers to leak).
-    for (const [key, stamps] of hits) {
-      const alive = stamps.filter((ts) => now - ts < windowMs);
-      if (alive.length === 0) {
-        hits.delete(key);
-      } else {
-        hits.set(key, alive);
+    // Opportunistic GC runs at most once every 30s to keep per-handshake path O(1)
+    if (now - lastGc > 30_000 || hits.size > 2_000) {
+      lastGc = now;
+      for (const [key, timestamps] of hits) {
+        const alive = timestamps.filter((ts) => now - ts < windowMs);
+        if (alive.length === 0) {
+          hits.delete(key);
+        } else {
+          hits.set(key, alive);
+        }
       }
     }
 
@@ -267,7 +271,9 @@ export function createSocketHandshakeLimiter(
       (typeof xff === 'string' ? xff.split(',')[0]?.trim() : socket.handshake.address) ||
       'unknown';
 
-    const stamps = hits.get(ip) ?? [];
+    const rawStamps = hits.get(ip) ?? [];
+    const stamps = rawStamps.filter((ts) => now - ts < windowMs);
+
     if (stamps.length >= max) {
       logger.warn({ ip, count: stamps.length }, 'socket_handshake_rate_limited');
       next(new Error('too many connections'));

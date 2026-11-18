@@ -5,13 +5,52 @@ generator client {
 datasource db {
   provider  = "postgresql"
   // Pooled URL used by the app (PgBouncer / Neon pooler / Railway).
-  // Include ?pgbouncer=true&connection_limit=5 when the URL points at
-  // PgBouncer in transaction mode; see .env.example.
   url       = env("DATABASE_URL")
   // Direct (non-pooled) URL used ONLY by prisma migrate / introspect.
-  // PgBouncer transaction mode cannot run migrations.
   directUrl = env("DIRECT_DATABASE_URL")
 }
+
+// ---------------------------------------------------------------------------
+// Multi-Tenancy Hierarchy (Organization -> Campus -> Block)
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String           @id @default(uuid())
+  name      String
+  slug      String           @unique
+  plan      String           @default("standard")
+  createdAt DateTime         @default(now())
+  campuses  Campus[]
+  alerts    EmergencyAlert[]
+}
+
+model Campus {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  address        String?
+  blocks         Block[]
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId], map: "idx_campus_organization")
+}
+
+model Block {
+  id        String    @id @default(uuid())
+  campusId  String
+  campus    Campus    @relation(fields: [campusId], references: [id], onDelete: Cascade)
+  name      String
+  students  Student[]
+  wardens   Warden[]
+  createdAt DateTime  @default(now())
+
+  @@index([campusId], map: "idx_block_campus")
+}
+
+// ---------------------------------------------------------------------------
+// Core Users & Emergency System
+// ---------------------------------------------------------------------------
 
 model Student {
   id                String           @id @default(uuid())
@@ -21,7 +60,12 @@ model Student {
   roomNumber        String
   emergencyContact  String
   medicalConditions String?
+  blockId           String?
+  block             Block?           @relation(fields: [blockId], references: [id])
   alerts            EmergencyAlert[]
+  leaveRequests     LeaveRequest[]
+
+  @@index([blockId], map: "idx_students_block")
 }
 
 model Warden {
@@ -30,14 +74,17 @@ model Warden {
   email              String           @unique
   passwordHash       String
   hostelBlock        String
+  blockId            String?
+  block              Block?           @relation(fields: [blockId], references: [id])
   acknowledgedAlerts EmergencyAlert[]
   deviceTokens       DeviceToken[]
+  reviewedLeaves     LeaveRequest[]   @relation("leaveReviewer")
+
+  @@index([blockId], map: "idx_wardens_block")
 }
 
 /// One row per browser/device that a warden has granted notification
-/// permission from. The token is FCM's registration token; it is globally
-/// unique per browser profile, so a shared browser reassigns the row
-/// rather than creating a duplicate.
+/// permission from. The token is FCM's registration token.
 model DeviceToken {
   id         Int      @id @default(autoincrement())
   wardenId   String
@@ -47,28 +94,18 @@ model DeviceToken {
   createdAt  DateTime @default(now())
   lastSeenAt DateTime @default(now())
 
-  // Push fan-out looks up every token per warden on suspension/cleanup, and
-  // the delete-on-logout path filters by wardenId.
   @@index([wardenId], map: "idx_device_tokens_warden")
 }
 
 model EmergencyAlert {
-  id                   String    @id @default(uuid())
+  id                   String        @id @default(uuid())
   studentId            String
-  student              Student   @relation(fields: [studentId], references: [id])
+  student              Student       @relation(fields: [studentId], references: [id])
+  organizationId       String?
+  organization         Organization? @relation(fields: [organizationId], references: [id])
   type                 String
 
-  // Full alert lifecycle. Valid transitions (enforced in alert.routes.ts):
-  //   PENDING      -> ACKNOWLEDGED  (PATCH /alerts/:id/acknowledge — warden)
-  //   PENDING      -> PENDING       (no-op; the worker's SMS escalation only
-  //                                    sends an SMS, it never changes status)
-  //   ACKNOWLEDGED -> RESOLVED      (PATCH /alerts/:id/resolve — warden,
-  //                                  requires resolutionNote >= 10 chars)
-  //   RESOLVED     -> RESOLVED      (re-resolve is idempotent, returns 200)
-  // Everything else is a 409 invalid_transition. Status is deliberately a
-  // plain string (no DB enum): the transition rules live in application code
-  // where they are testable, and adding RESOLVED required NO migration of an
-  // enum type — only the resolvedAt column below was added.
+  // Full alert lifecycle: PENDING -> ACKNOWLEDGED -> RESOLVED
   status               String    @default("PENDING")
   latitude             Float?
   longitude            Float?
@@ -80,12 +117,43 @@ model EmergencyAlert {
   resolvedAt           DateTime?
   resolutionNote       String?
 
-  // The warden board's hot query:
-  //   WHERE status = 'PENDING' ORDER BY created_at DESC
-  // Without this composite index it becomes a full scan + sort as alert
-  // history grows (500 students, demo day). DESC matches the query's sort.
   @@index([status, createdAt(sort: Desc)], map: "idx_alerts_status_created")
-
-  // "All alerts for this student" (student history / active alert lookup).
   @@index([studentId], map: "idx_alerts_student")
+  @@index([organizationId], map: "idx_alerts_org")
+}
+
+// ---------------------------------------------------------------------------
+// Leave Management System (Hostel In/Out & Gate Pass)
+// ---------------------------------------------------------------------------
+
+model LeaveRequest {
+  id                String       @id @default(uuid())
+  studentId         String
+  student           Student      @relation(fields: [studentId], references: [id])
+  type              String       // "DAY_OUTING" | "NIGHT_OUT" | "HOME_VISIT" | "MEDICAL"
+  reason            String
+  destination       String
+  emergencyContact  String
+  departureTime     DateTime
+  expectedReturn    DateTime
+  actualDeparture   DateTime?
+  actualReturn      DateTime?
+  status            String       @default("SUBMITTED") // SUBMITTED | APPROVED | REJECTED | DEPARTED | RETURNED | OVERDUE | CANCELLED
+  parentConsent     Boolean      @default(false)
+  parentContactedAt DateTime?
+  gatePassCode      String?      @unique
+  gatePassQr        String?
+  departedGateBy    String?
+  returnedGateBy    String?
+  reviewedBy        String?
+  reviewer          Warden?      @relation("leaveReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt        DateTime?
+  reviewRemarks     String?
+  overdueNotifiedAt DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([studentId, status], map: "idx_leave_student_status")
+  @@index([status, departureTime], map: "idx_leave_status_departure")
+  @@index([status, expectedReturn], map: "idx_leave_overdue")
 }

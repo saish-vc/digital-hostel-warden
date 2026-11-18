@@ -162,6 +162,29 @@ export const fcmSentTotal = new Counter({
 });
 
 // ---------------------------------------------------------------------------
+// Leave Management
+// ---------------------------------------------------------------------------
+
+export const leaveRequestsTotal = new Counter({
+  name: 'leave_requests_total',
+  help: 'Total leave requests submitted by type and outcome',
+  labelNames: ['type', 'status'] as const,
+  registers: [register],
+});
+
+export const leaveOverdueTotal = new Counter({
+  name: 'leave_overdue_total',
+  help: 'Total number of students identified as overdue returning from leave',
+  registers: [register],
+});
+
+export const leaveCurrentlyAway = new Gauge({
+  name: 'leave_currently_away',
+  help: 'Count of students currently departed on approved leaves',
+  registers: [register],
+});
+
+// ---------------------------------------------------------------------------
 // BullMQ
 // ---------------------------------------------------------------------------
 
@@ -281,5 +304,8 @@ export function resetMetricsForTests(): void {
   escalationsCancelledTotal.reset();
   smsSentTotal.reset();
   fcmSentTotal.reset();
+  leaveRequestsTotal.reset();
+  leaveOverdueTotal.reset();
+  leaveCurrentlyAway.reset();
   bullmqJobs.reset();
 }

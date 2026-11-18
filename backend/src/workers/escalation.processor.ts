@@ -26,35 +26,42 @@ async function notifyEscalationResult(
     return;
   }
 
-  try {
-    const response = await fetch(
-      `${base.replace(/\/+$/, '')}/internal/escalation-result`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-internal-token': token,
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(
+        `${base.replace(/\/+$/, '')}/internal/escalation-result`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-internal-token': token,
+          },
+          body: JSON.stringify({
+            alertId,
+            studentId,
+            outcome,
+            at: new Date().toISOString(),
+          }),
+          signal: AbortSignal.timeout(2_000),
         },
-        body: JSON.stringify({
-          alertId,
-          studentId,
-          outcome,
-          at: new Date().toISOString(),
-        }),
-        signal: AbortSignal.timeout(2_000),
-      },
-    );
-    if (!response.ok) {
+      );
+      if (response.ok) {
+        return;
+      }
       logger.warn(
-        { alertId, outcome, status: response.status },
+        { alertId, outcome, status: response.status, attempt },
         '[escalation] result relay rejected',
       );
+    } catch (error) {
+      logger.warn(
+        { alertId, outcome, attempt, err: error instanceof Error ? error.message : error },
+        '[escalation] result relay failed',
+      );
     }
-  } catch (error) {
-    logger.warn(
-      { alertId, outcome, err: error instanceof Error ? error.message : error },
-      '[escalation] result relay failed',
-    );
+
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
   }
 }
 
