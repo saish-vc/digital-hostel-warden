@@ -4,16 +4,20 @@ import { unregisterPushToken } from './services/push';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
+import Leaves from './pages/Leaves';
 import type { AppView } from './components/AppHeader';
 
 /**
- * Two-view shell. Deliberately NOT react-router: the dashboard has exactly
- * two real routes plus the /alerts/:id deep link the service worker opens,
- * and adding a router dependency for that is not worth the bundle or the
- * upgrade surface. History is a path (`/history`) so refresh/back work.
+ * Three-view shell. Deliberately NOT react-router: the dashboard has three
+ * real routes plus the /alerts/:id deep link the service worker opens, and
+ * adding a router dependency for that is not worth the bundle or the upgrade
+ * surface. History and Leaves are paths (`/history`, `/leaves`) so refresh and
+ * back work.
  */
 function viewFromPath(): AppView {
-  return window.location.pathname === '/history' ? 'history' : 'board';
+  if (window.location.pathname === '/history') return 'history';
+  if (window.location.pathname === '/leaves') return 'leaves';
+  return 'board';
 }
 
 export default function App() {
@@ -27,7 +31,8 @@ export default function App() {
   }, []);
 
   const navigate = (next: AppView) => {
-    window.history.pushState(null, '', next === 'history' ? '/history' : '/');
+    const path = next === 'history' ? '/history' : next === 'leaves' ? '/leaves' : '/';
+    window.history.pushState(null, '', path);
     setView(next);
   };
 
@@ -49,6 +54,8 @@ export default function App() {
 
   return view === 'history' ? (
     <History userName={userName} onNavigate={navigate} onLogout={handleLogout} />
+  ) : view === 'leaves' ? (
+    <Leaves userName={userName} onNavigate={navigate} onLogout={handleLogout} />
   ) : (
     <Dashboard userName={userName} onNavigate={navigate} onLogout={handleLogout} />
   );

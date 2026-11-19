@@ -7,9 +7,11 @@
  *
  * WHAT IT DOES (in order):
  *   1. Production guard (refuses with a banner unless FORCE_DEMO_RESET=true).
- *   2. Deletes ALL EmergencyAlert rows and ALL DeviceToken rows.
- *      Students and wardens are NEVER deleted — demo credentials stay
- *      stable from rehearsal to rehearsal.
+ *   2. Deletes ALL EmergencyAlert rows, ALL LeaveRequest rows and ALL
+ *      DeviceToken rows. Students and wardens are NEVER deleted — demo
+ *      credentials stay stable from rehearsal to rehearsal. Leave requests
+ *      go too: the warden's Leave tab must not open on yesterday's rehearsal
+ *      requests, and an overdue leave would fire the overdue worker mid-demo.
  *   3. Obliterates the BullMQ escalation queue (manually OR with force) so
  *      no orphaned 60s SMS timer from a previous rehearsal fires halfway
  *      through the next one.
@@ -42,6 +44,7 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
+import { DEMO_BLOCKS, ensureTenancy, type DemoTenancy } from './tenancy';
 
 const prisma = new PrismaClient();
 
@@ -54,8 +57,9 @@ const BIG_BANNER = `
 ==========================================================================
  WARNING: DEMO RESET
 ==========================================================================
- This DELETES every EmergencyAlert and DeviceToken row and wipes the
- BullMQ escalation queue. It does NOT touch Student / Warden accounts.
+ This DELETES every EmergencyAlert, LeaveRequest and DeviceToken row and
+ wipes the BullMQ escalation queue. It does NOT touch Student / Warden
+ accounts.
 ==========================================================================
 `;
 
@@ -178,31 +182,40 @@ async function flushEscalationQueue(): Promise<void> {
   }
 }
 
-async function ensurePopulation(bcryptHash: string, loadtestHash: string): Promise<void> {
+async function ensurePopulation(
+  bcryptHash: string,
+  loadtestHash: string,
+  tenancy: DemoTenancy,
+): Promise<void> {
   // Named demo credentials — update metadata only, NEVER the password hash,
   // so what is printed to the examiner in the pre-demo checklist works on
   // every rehearsal.
   await prisma.warden.upsert({
     where: { email: 'warden@hostel.local' },
-    update: { name: 'Priya Nair', hostelBlock: 'A' },
+    update: { name: 'Priya Nair', hostelBlock: 'A', blockId: tenancy.blockIds.A },
     create: {
       name: 'Priya Nair',
       email: 'warden@hostel.local',
       passwordHash: bcryptHash,
       hostelBlock: 'A',
+      blockId: tenancy.blockIds.A,
     },
   });
 
   for (let i = 0; i < EXTRA_WARDENS; i++) {
     const email = `warden.${i + 2}@demo.hostel`;
+    const hostelBlock = BLOCKS[i % BLOCKS.length];
     await prisma.warden.upsert({
       where: { email },
-      update: {}, // exists? leave everything as-is
+      // blockId is tenancy metadata, not a credential: backfilling it on an
+      // existing row is safe and keeps every warden inside the hierarchy.
+      update: { blockId: tenancy.blockIds[hostelBlock] },
       create: {
         name: EXTRA_WARDEN_NAMES[i] ?? `Warden ${i + 2}`,
         email,
         passwordHash: bcryptHash,
-        hostelBlock: BLOCKS[i % BLOCKS.length],
+        hostelBlock,
+        blockId: tenancy.blockIds[hostelBlock],
       },
     });
   }
@@ -223,10 +236,11 @@ async function ensurePopulation(bcryptHash: string, loadtestHash: string): Promi
       medicalConditions: 'Penicillin allergy',
     },
   ]) {
+    const blockId = tenancy.blockIds[named.roomNumber.charAt(0)];
     await prisma.student.upsert({
       where: { email: named.email },
-      update: {}, // exists? leave credentials stable
-      create: { ...named, passwordHash: bcryptHash },
+      update: { blockId }, // credentials stay stable
+      create: { ...named, passwordHash: bcryptHash, blockId },
     });
   }
 
@@ -235,10 +249,31 @@ async function ensurePopulation(bcryptHash: string, loadtestHash: string): Promi
   await prisma.student.createMany({
     data: Array.from({ length: LOADTEST_STUDENTS }, (_, idx) => {
       const s = loadtestStudent(idx + 1);
-      return { ...s, passwordHash: loadtestHash };
+      return {
+        ...s,
+        passwordHash: loadtestHash,
+        blockId: tenancy.blockIds[s.roomNumber.charAt(0)],
+      };
     }),
     skipDuplicates: true,
   });
+
+  // Rows created before the block columns existed (or before this reset
+  // learned to fill them) have a null blockId. Backfill by room prefix so the
+  // whole population answers "which block?" the same way.
+  for (const block of DEMO_BLOCKS) {
+    await prisma.student.updateMany({
+      where: {
+        blockId: null,
+        roomNumber: { startsWith: `${block.letter}-` },
+      },
+      data: { blockId: tenancy.blockIds[block.letter] },
+    });
+    await prisma.warden.updateMany({
+      where: { blockId: null, hostelBlock: block.letter },
+      data: { blockId: tenancy.blockIds[block.letter] },
+    });
+  }
 }
 
 /**
@@ -277,13 +312,28 @@ async function restartMetricsProcesses(): Promise<void> {
     return;
   }
 
+  // The leave worker owns `leave_overdue_total`, so it needs the same restart
+  // or the Grafana panel keeps yesterday's overdue count. It is optional: an
+  // older PM2 process list (or a machine that only runs api + worker) must not
+  // turn a successful reset into a failure.
+  const leaveCommand =
+    process.platform === 'win32'
+      ? 'npx.cmd pm2 restart leave-worker --update-env'
+      : 'npx pm2 restart leave-worker --update-env';
+  try {
+    await run(leaveCommand, { cwd: process.cwd(), timeout: 60_000 });
+    console.log('[demo-reset] restarted leave-worker — overdue counter zeroed');
+  } catch {
+    console.warn('[demo-reset] leave-worker not in PM2; skipped its restart');
+  }
+
   // PM2 reports "online" before the new processes have bound their ports and
   // served a scrape. Without this the summary prints against a half-started
   // cluster and the first Grafana refresh still shows the old counters.
   await new Promise((resolve) => setTimeout(resolve, 5_000));
 }
 
-async function seedResolvedAlerts(wardenId: string): Promise<void> {
+async function seedResolvedAlerts(wardenId: string, organizationId: string): Promise<void> {
   const students = await Promise.all(
     SEED_RESOLVED.map((seed) =>
       prisma.student.findUniqueOrThrow({ where: { email: seed.studentEmail } }),
@@ -308,6 +358,7 @@ async function seedResolvedAlerts(wardenId: string): Promise<void> {
       return prisma.emergencyAlert.create({
         data: {
           studentId: student.id,
+          organizationId,
           type: seed.type,
           status: 'RESOLVED',
           latitude: null,
@@ -334,11 +385,15 @@ async function main(): Promise<void> {
   const bcryptHash = await bcrypt.hash(DEMO_PASSWORD, 12);
   const loadtestHash = await bcrypt.hash(LOADTEST_PASSWORD, 12);
 
+  // The tenant hierarchy must exist before anyone is assigned to a block.
+  const tenancy = await ensureTenancy(prisma);
+
   // 1) wipe the volatile state
   const removedAlerts = await prisma.emergencyAlert.deleteMany();
+  const removedLeaves = await prisma.leaveRequest.deleteMany();
   const removedTokens = await prisma.deviceToken.deleteMany();
   console.log(
-    `[demo-reset] deleted alerts=${removedAlerts.count} deviceTokens=${removedTokens.count}`,
+    `[demo-reset] deleted alerts=${removedAlerts.count} leaves=${removedLeaves.count} deviceTokens=${removedTokens.count}`,
   );
 
   // 2) kill orphaned SMS timers BEFORE creating new state
@@ -351,13 +406,13 @@ async function main(): Promise<void> {
   // fail with P2025 on a freshly migrated database (the exact state a new
   // clone / CI runner starts from) even though it then would have created
   // that warden a few lines later.
-  await ensurePopulation(bcryptHash, loadtestHash);
+  await ensurePopulation(bcryptHash, loadtestHash, tenancy);
 
   const headWarden = await prisma.warden.findUniqueOrThrow({
     where: { email: 'warden@hostel.local' },
   });
 
-  await seedResolvedAlerts(headWarden.id);
+  await seedResolvedAlerts(headWarden.id, tenancy.organizationId);
 
   // 4) zero the in-process Prometheus counters, then wait for the cluster to
   //    be serving again before reporting state.

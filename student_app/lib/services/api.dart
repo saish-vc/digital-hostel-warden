@@ -123,6 +123,108 @@ class ApiService {
     return body;
   }
 
+  // ---------------------------------------------------------------------
+  // Leave requests & gate passes
+  // ---------------------------------------------------------------------
+
+  /// Shared request path for the leave endpoints: one auth header, one error
+  /// shape (`{ error }` from the backend), one place to unwrap list bodies
+  /// (`_decode` wraps a JSON array as `{ data: [...] }`).
+  static Future<Map<String, dynamic>> _send(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final token = await ApiService.token;
+    if (token == null) {
+      throw ApiException('Not logged in');
+    }
+
+    final uri = Uri.parse('$kApiBaseUrl$path');
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+
+    final http.Response response;
+    if (method == 'POST') {
+      response = await http.post(uri, headers: headers, body: jsonEncode(body ?? {}));
+    } else if (method == 'PATCH') {
+      response = await http.patch(uri, headers: headers, body: jsonEncode(body ?? {}));
+    } else if (method == 'DELETE') {
+      response = await http.delete(uri, headers: headers);
+    } else {
+      response = await http.get(uri, headers: headers);
+    }
+
+    final decoded = _decode(response);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        decoded['error']?.toString() ?? 'Could not reach the hostel server',
+        statusCode: response.statusCode,
+      );
+    }
+
+    return decoded;
+  }
+
+  static Future<Map<String, dynamic>> createLeave({
+    required String type,
+    required String reason,
+    required String destination,
+    String? emergencyContact,
+    required DateTime departureTime,
+    required DateTime expectedReturn,
+  }) {
+    return _send('POST', '/leaves', body: {
+      'type': type,
+      'reason': reason,
+      'destination': destination,
+      if (emergencyContact != null && emergencyContact.trim().isNotEmpty)
+        'emergencyContact': emergencyContact.trim(),
+      'departureTime': departureTime.toUtc().toIso8601String(),
+      'expectedReturn': expectedReturn.toUtc().toIso8601String(),
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> myLeaves() async {
+    final body = await _send('GET', '/leaves/my');
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+  }
+
+  static Future<Map<String, dynamic>> leavePass(String leaveId) {
+    return _send('GET', '/leaves/$leaveId/pass');
+  }
+
+  static Future<Map<String, dynamic>> cancelLeave(String leaveId) {
+    return _send('DELETE', '/leaves/$leaveId');
+  }
+
+  /// Off-campus SOS. Location is optional, exactly like the on-campus button:
+  /// a GPS failure must never stop the alert.
+  static Future<Map<String, dynamic>> leaveEmergency(
+    String leaveId, {
+    double? latitude,
+    double? longitude,
+    double? locationAccuracy,
+  }) {
+    final payload = <String, dynamic>{};
+    if (latitude != null && longitude != null) {
+      payload['latitude'] = latitude;
+      payload['longitude'] = longitude;
+      if (locationAccuracy != null) {
+        payload['locationAccuracy'] = locationAccuracy;
+      }
+    }
+    return _send('POST', '/leaves/$leaveId/emergency', body: payload);
+  }
+
   static Future<String?> userName() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_userNameKey);

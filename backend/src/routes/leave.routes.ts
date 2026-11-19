@@ -6,9 +6,12 @@ import {
   leaveRequestsTotal,
   leaveOverdueTotal,
   leaveCurrentlyAway,
+  alertsCreatedTotal,
 } from '../config/metrics';
 import { authenticate, requireRole } from '../middleware/auth';
 import { getIO } from '../sockets';
+import { enqueueEscalation } from '../queues/escalation.queue';
+import { sendAlertPush } from '../services/push.service';
 
 const router = Router();
 
@@ -612,7 +615,18 @@ router.post(
     try {
       const leave = await prisma.leaveRequest.findUnique({
         where: { id },
-        include: { student: { select: studentSelect } },
+        include: {
+          student: {
+            select: {
+              ...studentSelect,
+              // One extra hop so the off-campus alert lands in the tenant,
+              // like every alert created through POST /alerts will.
+              block: {
+                select: { campus: { select: { organizationId: true } } },
+              },
+            },
+          },
+        },
       });
 
       if (!leave) {
@@ -629,6 +643,7 @@ router.post(
       const alert = await prisma.emergencyAlert.create({
         data: {
           studentId,
+          organizationId: leave.student.block?.campus.organizationId ?? null,
           type: `OFF_CAMPUS_LEAVE:${leave.type}`,
           latitude: typeof latitude === 'number' ? latitude : null,
           longitude: typeof longitude === 'number' ? longitude : null,
@@ -640,9 +655,15 @@ router.post(
         },
       });
 
+      alertsCreatedTotal.inc({ type: `OFF_CAMPUS_LEAVE:${leave.type}` });
+
+      // SAME CONTRACT AS POST /alerts. The dashboard socket hook listens for
+      // `alert:new`; this route used to emit `alert:created`, which nothing
+      // subscribed to — an off-campus SOS was saved but never appeared on the
+      // warden board. For a safety feature that is the worst possible bug.
       try {
         const io = getIO();
-        io.to('wardens').emit('alert:created', {
+        io.to('wardens').emit('alert:new', {
           ...alert,
           offCampusLeave: {
             leaveId: leave.id,
@@ -653,8 +674,19 @@ router.post(
           },
         });
       } catch (ioErr) {
-        logger.warn({ err: ioErr }, '[socket] could not emit alert:created for leave SOS');
+        logger.warn({ err: ioErr }, '[socket] could not emit alert:new for leave SOS');
       }
+
+      // Push and the 60s escalation are additive and fire-and-forget, exactly
+      // as in POST /alerts: Redis being down must not fail the SOS.
+      sendAlertPush(alert);
+
+      enqueueEscalation(alert.id).catch((error) => {
+        logger.error(
+          { alertId: alert.id, err: error instanceof Error ? error.message : error },
+          `[leave] could not schedule escalation for off-campus alert ${alert.id} (Redis down?)`,
+        );
+      });
 
       logger.warn(
         { alertId: alert.id, leaveId: id, studentId },

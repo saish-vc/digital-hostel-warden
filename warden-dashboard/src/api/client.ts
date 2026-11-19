@@ -195,3 +195,109 @@ export function deleteFcmToken(token: string): Promise<{ ok: boolean; deleted: n
     body: JSON.stringify({ token }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Leave management (P0.3)
+// ---------------------------------------------------------------------------
+
+export interface LeaveStudent {
+  id: string;
+  name: string;
+  email: string;
+  roomNumber: string;
+  emergencyContact: string;
+  medicalConditions: string | null;
+}
+
+export interface LeaveReviewer {
+  id: string;
+  name: string;
+  email: string;
+  hostelBlock: string;
+}
+
+export interface LeaveRequest {
+  id: string;
+  studentId: string;
+  type: string;
+  reason: string;
+  destination: string;
+  emergencyContact: string;
+  departureTime: string;
+  expectedReturn: string;
+  actualDeparture: string | null;
+  actualReturn: string | null;
+  status: 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'DEPARTED' | 'RETURNED' | 'OVERDUE' | 'CANCELLED' | string;
+  parentConsent: boolean;
+  gatePassCode: string | null;
+  gatePassQr: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewRemarks: string | null;
+  createdAt: string;
+  student: LeaveStudent;
+  reviewer?: LeaveReviewer | null;
+}
+
+export interface LeaveStats {
+  pendingApprovals: number;
+  currentlyAway: number;
+  approvedPasses: number;
+  overdueCount: number;
+}
+
+export interface LeaveListResponse {
+  data: LeaveRequest[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export function fetchLeaveStats(): Promise<LeaveStats> {
+  return api<LeaveStats>('/leaves/stats');
+}
+
+export function fetchLeaves(
+  params: { page?: number; limit?: number; status?: string; type?: string; studentName?: string } = {},
+): Promise<LeaveListResponse> {
+  const query = new URLSearchParams();
+  query.set('page', String(params.page ?? 1));
+  query.set('limit', String(params.limit ?? 100));
+  if (params.status) query.set('status', params.status);
+  if (params.type) query.set('type', params.type);
+  if (params.studentName) query.set('studentName', params.studentName);
+  return api<LeaveListResponse>(`/leaves?${query.toString()}`);
+}
+
+export function fetchActiveLeaves(): Promise<LeaveRequest[]> {
+  return api<LeaveRequest[]>('/leaves/active');
+}
+
+export function fetchOverdueLeaves(): Promise<LeaveRequest[]> {
+  return api<LeaveRequest[]>('/leaves/overdue');
+}
+
+export function reviewLeave(
+  leaveId: string,
+  status: 'APPROVED' | 'REJECTED',
+  reviewRemarks?: string,
+): Promise<LeaveRequest> {
+  return api<LeaveRequest>(`/leaves/${leaveId}/review`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, reviewRemarks }),
+  });
+}
+
+export function recordGateDeparture(
+  leaveId: string,
+  gatePassCode?: string,
+): Promise<LeaveRequest> {
+  return api<LeaveRequest>(`/leaves/${leaveId}/gate-departure`, {
+    method: 'POST',
+    body: JSON.stringify({ gatePassCode }),
+  });
+}
+
+export function recordGateReturn(leaveId: string): Promise<LeaveRequest> {
+  return api<LeaveRequest>(`/leaves/${leaveId}/gate-return`, {
+    method: 'POST',
+  });
+}

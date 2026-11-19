@@ -51,5 +51,27 @@ module.exports = {
       merge_logs: true,
       time: true,
     },
+    {
+      // Scans DEPARTED leaves every 5 minutes and flips the ones past
+      // expectedReturn to OVERDUE (and refreshes the currently-away gauge).
+      // Without this process the status never changes and the Grafana panel
+      // stays flat; the dashboard's Overdue view still lists the rows because
+      // it computes DEPARTED + expectedReturn < now, but that is a fallback,
+      // not the source of truth.
+      //
+      // Fork mode, one instance: it owns a BullMQ repeatable scheduler, and a
+      // second consumer would just race the same updateMany.
+      name: 'leave-worker',
+      script: 'dist/workers/leave-overdue.worker.js',
+      instances: 1,
+      exec_mode: 'fork',
+      env: {
+        NODE_ENV: 'production',
+      },
+      max_memory_restart: '200M',
+      kill_timeout: 10000,
+      merge_logs: true,
+      time: true,
+    },
   ],
 };

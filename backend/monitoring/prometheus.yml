@@ -63,3 +63,15 @@ scrape_configs:
     static_configs:
       - targets:
           - 'host.docker.internal:4001'
+
+  # ---------------------------------------------------------------------------
+  # The leave-overdue worker (fork process, PM2 app "leave-worker").
+  # LEAVE_WORKER_METRICS_PORT defaults to 4002; change both places together.
+  # ---------------------------------------------------------------------------
+  - job_name: 'leave-worker'
+    metrics_path: '/metrics'
+    params:
+      token: ['demo-metrics-token-CHANGE-ME']
+    static_configs:
+      - targets:
+          - 'host.docker.internal:4002'

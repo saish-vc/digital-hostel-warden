@@ -114,21 +114,53 @@ flowchart TD
 ### Priority 0 (P0) — Immediate Next Sprint: Leave UI & Multi-Tenancy Wiring
 *Goal: Give students and wardens the complete visual interface for leaves and gate passes so it functions 100% end-to-end.*
 
-- [ ] **Task P0.1: Database Migration Deployment**
-  - Run `npx prisma migrate dev --name add_multitenancy_and_leaves` against a running PostgreSQL instance.
-  - Update `prisma/seed.ts` to seed an initial `Organization` ("Acme University"), `Campus` ("Main Campus"), `Block` ("Block A (Boys)", "Block B (Girls)"), and assign demo students/wardens to blocks.
-- [ ] **Task P0.2: Flutter Student Leave UI**
-  - Screen `lib/screens/leave_apply_screen.dart`: Form for departure time, expected return, reason, destination, emergency contact, type dropdown (`DAY_OUTING`, `NIGHT_OUT`, `HOME_VISIT`, `MEDICAL`).
-  - Screen `lib/screens/leave_status_screen.dart`: Active leaves list with visual badges (`PENDING`, `APPROVED`, `DEPARTED`, `OVERDUE`).
-  - Screen `lib/screens/gate_pass_qr_screen.dart`: Displays the generated `HG-XXXX` code and high-contrast QR code for security guard scanning.
-  - Off-campus SOS button on the gate pass screen that calls `POST /leaves/:id/emergency`.
-- [ ] **Task P0.3: Warden Dashboard Leave Management View**
-  - New tab: **Leave Requests & Outings**.
-  - Sub-views:
-    - *Pending Approvals:* Table with student room, destination, reason, departure/return dates, and one-click "Approve" / "Reject" actions.
-    - *Currently Away:* Live counter and search list of students currently outside the gate.
-    - *Overdue Alerts:* Red-flagged list of students who have not returned past `expectedReturn`.
-    - *Gate Verification Modal:* Quick input/scanner for security to enter `HG-XXXX` code or scan QR to mark departure/return.
+- [x] **Task P0.1: Database Migration Deployment** — DONE 2026-11-18
+  - Migration `20261118072343_add_multitenancy_and_leaves` applied: creates
+    `Organization`, `Campus`, `Block`, `LeaveRequest` and adds `blockId` to
+    `Student`/`Warden` plus `organizationId` to `EmergencyAlert`. Purely
+    additive; no existing column was altered or dropped.
+  - `prisma/tenancy.ts` is the single source of the demo hierarchy, used by
+    both `seed.ts` and `demo-reset.ts` so they cannot drift:
+    `Acme University` → `Main Campus` → `Block A (Girls)`, `Block B (Boys)`,
+    `Block C (Boys)`. Letters follow the room prefixes (`A-102`, `B-314`);
+    Block C exists because the 500 load-test students are spread over A/B/C.
+  - Verified: 502/502 students and 5/5 wardens have a `blockId`, all
+    `EmergencyAlert` rows have an `organizationId`.
+  - `demo:reset` now also deletes `LeaveRequest` rows (a stale overdue leave
+    would otherwise fire the overdue worker mid-demo) and backfills blocks.
+  - `leave-worker` added to PM2 (`dist/workers/leave-overdue.worker.js`, fork,
+    1 instance) and to the Prometheus scrape config on port 4002. It was
+    previously written but never started.
+  - Fixed in passing: `POST /leaves/:id/emergency` emitted `alert:created`,
+    which no client subscribes to, and never scheduled escalation. It now
+    emits `alert:new`, sends push, and enqueues the 60s escalation exactly
+    like `POST /alerts`, and stamps the alert with the tenant id.
+- [x] **Task P0.2: Flutter Student Leave UI** — DONE 2026-11-18
+  - `lib/screens/leave_apply_screen.dart`: full form (type dropdown
+    `DAY_OUTING` / `NIGHT_OUT` / `HOME_VISIT` / `MEDICAL`, reason, destination,
+    departure, expected return, emergency contact) with client-side
+    validation that return is after departure.
+  - `lib/screens/leave_status_screen.dart`: active/history list with badges for
+    `SUBMITTED`/`PENDING`, `APPROVED`, `DEPARTED`, `RETURNED`, `OVERDUE`,
+    `REJECTED`; pulls to refresh; opens the gate pass for approved rows.
+  - `lib/screens/gate_pass_qr_screen.dart`: renders the `HG-XXXXXX` code and a
+    high-contrast QR (`qr_flutter 4.1.0`) for guard scanning, plus the
+    off-campus SOS button.
+  - Off-campus SOS calls `POST /leaves/:id/emergency`; the screen shows the
+    alert id so the student knows help is on the way.
+  - Entry points: AppBar action and a "Leave & gate pass" card on the home
+    screen. `flutter analyze`: **No issues found.**
+- [x] **Task P0.3: Warden Dashboard Leave Management View** — DONE 2026-11-18
+  - `src/pages/Leaves.tsx` behind a **Leave Requests & Outings** nav tab and the
+    `/leaves` route.
+  - Sub-views: *Pending* (approve / reject with remarks), *Approved*,
+    *Currently Away* (live list of students outside the gate), *Overdue*
+    (red-flagged, with time late), plus stat cards and a **Gate check** modal
+    that accepts an `HG-XXXXXX` code to record departure or return.
+  - `npx tsc --noEmit` and `npm run build` pass. Verified in the browser as a
+    warden: an overdue row rendered (Aarav, `HG-2EEFD9`, "1h 10m late"), the
+    gate-check modal recorded the return, and the board refreshed to
+    `OVERDUE 0` with no console errors.
 - [ ] **Task P0.4: Parent Notification Trigger**
   - Hook into `POST /leaves` or `PATCH /leaves/:id/review` to trigger an SMS/WhatsApp dispatch to the student's emergency contact when `NIGHT_OUT` or `HOME_VISIT` is requested.
 

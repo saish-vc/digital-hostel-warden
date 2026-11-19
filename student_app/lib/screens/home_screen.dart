@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import '../services/api.dart';
 import '../services/location.dart';
 import 'confirmation_screen.dart';
+import 'leave_status_screen.dart';
 import 'login_screen.dart';
 
 enum _LocationStatus { ready, locating, unavailable }
@@ -147,6 +148,13 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Hostel SOS'),
         actions: [
           IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const LeaveStatusScreen()),
+            ),
+            icon: const Icon(Icons.luggage_outlined),
+            tooltip: 'Leave requests & gate pass',
+          ),
+          IconButton(
             onPressed: _logout,
             icon: const Icon(Icons.logout),
             tooltip: 'Log out',
@@ -263,6 +271,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 const Text(
                   'A warden is notified immediately.',
                   style: TextStyle(color: Colors.white38, fontSize: 13),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const LeaveStatusScreen()),
+                  ),
+                  icon: const Icon(Icons.luggage_outlined, size: 18),
+                  label: const Text('Leave & gate pass'),
+                  style: TextButton.styleFrom(foregroundColor: Colors.white70),
                 ),
               ],
             ),

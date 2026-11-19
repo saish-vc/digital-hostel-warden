@@ -17,7 +17,8 @@ their evidence do not fit on two pages.)
 > live. nginx **is** running here; it is part of the demo topology.
 >
 > **Environment this script assumes:** PM2 `api` ×3 (3001/3002/3003) + `worker`
-> ×1; nginx 1.31.8 on **:8080** fronting those three instances; containers
+> ×1 + `leave-worker` ×1 (the overdue-leave sweep, metrics on :4002); nginx
+> 1.31.8 on **:8080** fronting those three instances; containers
 > `backend-postgres-1` and `backend-redis-1`; Prometheus :9090, Grafana :3000,
 > Alertmanager :9093; dashboard on :5173 pinned to
 > `VITE_API_URL=http://localhost:8080`; `ESCALATION_DELAY_MS=60000`;
@@ -41,7 +42,7 @@ yet, the reset prints a warning and the counters keep their old values.
 cd backend
 npm run test:db:up                        # backend-postgres-1 + backend-redis-1
 docker compose -f docker-compose.monitoring.yml up -d
-npx pm2 start ecosystem.config.js         # api ×3 + worker ×1  ← BEFORE the reset
+npx pm2 start ecosystem.config.js         # api ×3 + worker ×1 + leave-worker ×1  ← BEFORE the reset
 
 # front door — keep this terminal open (daemon mode dies with the shell here)
 $prefix = (Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Directory -Filter 'nginxinc*' | Select-Object -First 1).FullName + '\nginx-1.31.8'
@@ -54,17 +55,22 @@ cd ../warden-dashboard && npm run dev     # :5173
 `demo:reset` refuses to run when `NODE_ENV=production` (drill **K3**). Run it
 from your own shell, not from inside a PM2 env. Expected tail:
 `0 active alerts, 3 resolved, …` and
-`[demo-reset] restarted api + worker — Prometheus counters zeroed`.
+`[demo-reset] restarted api + worker — Prometheus counters zeroed` followed by
+`[demo-reset] restarted leave-worker — overdue counter zeroed`.
 
 - [ ] `curl -s localhost:8080/health` → `{"status":"ok","instanceId":"30xx",...}` (**F1**)
 - [ ] Repeat six times; the `instanceId` cycles 3001 → 3002 → 3003. That is
       nginx round-robin, not PM2 sharing. (**F1**, **F4**)
-- [ ] Prometheus `:9090/targets` → **4/4 up** (api ×3 + worker). (**H5**)
+- [ ] Prometheus `:9090/targets` → **5/5 up** (api ×3 + worker + leave-worker). (**H5**)
       If one API target is down, check for another container publishing that
       port — `docker ps --format '{{.Names}} {{.Ports}}'`. A shadowing
       container makes Prometheus scrape the wrong process and every panel lies.
 - [ ] Grafana `:3000` → dashboard **Hostel Emergency** (uid `hostel-emergency`,
       the *unconfigured* variant). Panel 1 reads **0**, not "No data". (**H1**)
+- [ ] **After the reset** (it wipes leaves), submit one day outing from the
+      student app as `aarav@hostel.local` so the warden's approval queue is not
+      empty on stage. The 60-second escalation window is otherwise dead air; use
+      it to approve the leave and issue the gate pass.
 - [ ] **Click the "Active" tab.** The filter persists in `localStorage`, so a
       previous session's "Resolved" tab survives the reset and hides the board.
       This bit us in dry-run **K6**.
@@ -142,6 +148,18 @@ Show the empty board: **"No active alerts"**, **Live** indicator green.
 1. Raise a **second** SOS from `diya@hostel.local`.
 2. **Do not acknowledge.** Let the countdown run out. The scheduler is accurate
    to ~70 ms: measured fire at **60.135 s / 60.133 s** in the two V2 runs. (**E2**, **K6/K7**)
+   > **Use the wait â€” approve a leave and issue a gate pass (60s, on the phone).**
+   > While the countdown runs, open **Leave Requests & Outings**. Aarav's
+   > day-outing is waiting under *Pending*; approve it. The API mints an
+   > `HG-XXXXXX` gate pass, and the student app flips to **Approved** over
+   > `leave:updated` (socket push, no polling). On the phone, open **Leave & gate
+   > pass** to show the QR. Type the code into **Gate check** â†’ departure moves
+   > the row to *Currently away*. The SOS button on that screen calls
+   > `POST /leaves/:id/emergency`: the warden board gets a normal `alert:new`
+   > card and the same 60-second escalation is scheduled. A return check closes
+   > the leave and the away counter drops to 0.
+   > Verified end to end 2026-11-18: 34/34 rehearsal checks, including the
+   > off-campus SOS and its escalation job.
 3. Watch the pill and narrate what it actually proves:
    - `⏱ Ns` while the window runs,
    - `Escalation pending…` once it elapses and the worker has not reported yet,

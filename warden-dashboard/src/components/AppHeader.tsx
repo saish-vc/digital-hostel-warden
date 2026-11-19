@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export type AppView = 'board' | 'history';
+export type AppView = 'board' | 'history' | 'leaves';
 
 interface AppHeaderProps {
   current: AppView;
@@ -56,6 +56,14 @@ export default function AppHeader({
               className={tabClass('history')}
             >
               History
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('leaves')}
+              aria-current={current === 'leaves' ? 'page' : undefined}
+              className={tabClass('leaves')}
+            >
+              Leaves
             </button>
           </nav>
         </div>
