@@ -122,7 +122,7 @@
         }
       ],
       "type": "timeseries",
-      "title": "â›” BullMQ failed jobs â€” THE safety-guarantee panel",
+      "title": "⛔ BullMQ failed jobs — THE safety-guarantee panel",
       "interval": "15s"
     },
     {
@@ -142,7 +142,7 @@
                 "match": "null",
                 "result": {
                   "color": "green",
-                  "text": "0 â€” no overrides"
+                  "text": "0 — no overrides"
                 }
               },
               "type": "special"
@@ -206,7 +206,7 @@
         }
       ],
       "type": "stat",
-      "title": "ðŸšª SOS break-glass overrides (total)"
+      "title": "🚪 SOS break-glass overrides (total)"
     },
     {
       "datasource": {
@@ -448,7 +448,7 @@
           "language": "plaintext",
           "showLineNumbers": false
         },
-        "content": "### Notification channels\n\n**SMS: not configured (Twilio trial) | FCM: not configured (Web Push)**\n\nNeither channel has credentials in this environment, so `sms_sent_total` and `fcm_sent_total` have no series and any rate panel over them reads \"No data\". This panel states that outright instead of showing a blank.\n\nThe counters and the Alertmanager rules that use them (`SMSSuccessRateLow`, stale-token checks) are still registered and still scraped â€” nothing was deleted. Once Twilio and Firebase are configured, load the **Hostel Emergency (SMS + FCM configured)** dashboard, which shows the same counters as live stats.",
+        "content": "### Notification channels\n\n**SMS: not configured (Twilio trial) | FCM: not configured (Web Push)**\n\nNeither channel has credentials in this environment, so `sms_sent_total` and `fcm_sent_total` have no series and any rate panel over them reads \"No data\". This panel states that outright instead of showing a blank.\n\nThe counters and the Alertmanager rules that use them (`SMSSuccessRateLow`, stale-token checks) are still registered and still scraped — nothing was deleted. Once Twilio and Firebase are configured, load the **Hostel Emergency (SMS + FCM configured)** dashboard, which shows the same counters as live stats.",
         "mode": "markdown"
       },
       "type": "text",
@@ -459,7 +459,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Open Socket.IO connections. The NoWardensConnected alert fires when this stays 0 for 5m â€” possibly just nighttime, worth a glance.",
+      "description": "Open Socket.IO connections. The NoWardensConnected alert fires when this stays 0 for 5m — possibly just nighttime, worth a glance.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -607,7 +607,7 @@
           "language": "plaintext",
           "showLineNumbers": false
         },
-        "content": "### Health of the pipeline\n- `up{job=\"api\"}` Ã— 3 = 1, `up{job=\"worker\"}` = 1\n- `EscalationFailuresHigh` must NEVER fire during a demo\n- `bullmq_jobs{state=\"failed\"}` (panel 1) is the single most important series\n- `rate(sos_overrides_total[1h])` > 0 = an emergency forced past the limiter\n- `sms_sent_total` / `fcm_sent_total` have **no series** on this dashboard â€” the channels are unconfigured, so do not quote token-verification numbers. See the \"Notification channels\" panel; those queries belong to the configured dashboard.",
+        "content": "### Health of the pipeline\n- `up{job=\"api\"}` × 3 = 1, `up{job=\"worker\"}` = 1\n- `EscalationFailuresHigh` must NEVER fire during a demo\n- `bullmq_jobs{state=\"failed\"}` (panel 1) is the single most important series\n- `rate(sos_overrides_total[1h])` > 0 = an emergency forced past the limiter\n- `sms_sent_total` / `fcm_sent_total` have **no series** on this dashboard — the channels are unconfigured, so do not quote token-verification numbers. See the \"Notification channels\" panel; those queries belong to the configured dashboard.",
         "mode": "markdown"
       },
       "type": "text",
@@ -630,5 +630,5 @@
   "timezone": "browser",
   "version": 1,
   "weekStart": "",
-  "description": "Variant A â€” SMS and FCM are NOT configured in this environment. The notification panels are a static statement of that fact, not a blank \"No data\". Load hostel-emergency-configured instead once Twilio and Firebase are set up."
+  "description": "Variant A — SMS and FCM are NOT configured in this environment. The notification panels are a static statement of that fact, not a blank \"No data\". Load hostel-emergency-configured instead once Twilio and Firebase are set up."
 }

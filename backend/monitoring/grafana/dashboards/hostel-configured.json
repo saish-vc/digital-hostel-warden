@@ -122,7 +122,7 @@
         }
       ],
       "type": "timeseries",
-      "title": "â›” BullMQ failed jobs â€” THE safety-guarantee panel",
+      "title": "⛔ BullMQ failed jobs — THE safety-guarantee panel",
       "interval": "15s"
     },
     {
@@ -142,7 +142,7 @@
                 "match": "null",
                 "result": {
                   "color": "green",
-                  "text": "0 â€” no overrides"
+                  "text": "0 — no overrides"
                 }
               },
               "type": "special"
@@ -206,7 +206,7 @@
         }
       ],
       "type": "stat",
-      "title": "ðŸšª SOS break-glass overrides (total)"
+      "title": "🚪 SOS break-glass overrides (total)"
     },
     {
       "datasource": {
@@ -598,7 +598,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Open Socket.IO connections. The NoWardensConnected alert fires when this stays 0 for 5m â€” possibly just nighttime, worth a glance.",
+      "description": "Open Socket.IO connections. The NoWardensConnected alert fires when this stays 0 for 5m — possibly just nighttime, worth a glance.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -746,7 +746,7 @@
           "language": "plaintext",
           "showLineNumbers": false
         },
-        "content": "### Health of the pipeline\n- `up{job=\"api\"}` Ã— 3 = 1, `up{job=\"worker\"}` = 1\n- `EscalationFailuresHigh` must NEVER fire during a demo\n- `bullmq_jobs{state=\"failed\"}` (panel 1) is the single most important series\n- `rate(sos_overrides_total[1h])` > 0 = an emergency forced past the limiter\n- verify tokens: `sum(rate(fcm_sent_total[15m]))` / `sum(rate(fcm_sent_total{status=\"success\"}[15m]))`",
+        "content": "### Health of the pipeline\n- `up{job=\"api\"}` × 3 = 1, `up{job=\"worker\"}` = 1\n- `EscalationFailuresHigh` must NEVER fire during a demo\n- `bullmq_jobs{state=\"failed\"}` (panel 1) is the single most important series\n- `rate(sos_overrides_total[1h])` > 0 = an emergency forced past the limiter\n- verify tokens: `sum(rate(fcm_sent_total[15m]))` / `sum(rate(fcm_sent_total{status=\"success\"}[15m]))`",
         "mode": "markdown"
       },
       "type": "text",
@@ -769,5 +769,5 @@
   "timezone": "browser",
   "version": 1,
   "weekStart": "",
-  "description": "Variant B â€” load this once Twilio and Firebase are configured. The notification panels query the raw counters with `or vector(0)`, so a zero counter reads 0 rather than \"No data\"."
+  "description": "Variant B — load this once Twilio and Firebase are configured. The notification panels query the raw counters with `or vector(0)`, so a zero counter reads 0 rather than \"No data\"."
 }
