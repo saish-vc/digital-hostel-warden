@@ -1,4 +1,8 @@
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
+const configuredApiUrl = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, '');
+if (!configuredApiUrl) {
+  throw new Error('VITE_API_URL is not set — add it to warden-dashboard/.env (see .env.example).');
+}
+export const API_URL: string = configuredApiUrl;
 
 export interface AlertStudent {
   id: string;
@@ -21,15 +25,9 @@ export interface Alert {
   acknowledgedBy: string | null;
   resolvedAt: string | null;
   resolutionNote: string | null;
+  /** Set by the escalation worker only after the SMS provider confirmed the send. */
+  escalatedAt: string | null;
   student: AlertStudent;
-  /**
-   * Socket-only state, never sent by the API: set from `alert:escalated` /
-   * `alert:escalation-failed`. There is no schema column for these, so a page
-   * reload loses them and the pill reports "unconfirmed" rather than claiming
-   * a delivery it cannot verify.
-   */
-  escalatedAt?: string | null;
-  escalationFailedAt?: string | null;
 }
 
 export interface AlertHistoryRow {
@@ -118,8 +116,6 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
   return (await response.json()) as T;
 }
-
-export { API_URL };
 
 /** GET /alerts with optional server-side status bucket + row cap. */
 export function fetchAlerts(

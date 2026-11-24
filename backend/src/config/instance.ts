@@ -6,11 +6,10 @@
  * 2. NODE_APP_INSTANCE — set by PM2 for every cluster worker (0, 1, 2, ...).
  *    Port = 3001 + index, so PM2's 3 cluster workers listen on 3001/3002/3003
  *    and the nginx upstream can address each one individually.
- * 3. 4000 — the historical single-instance dev default (the dashboard and
- *    Flutter app already point here).
+ * 3. API_PORT, else 3001 — the single-instance dev default. 3001 is also the
+ *    first PM2/nginx upstream, so dev and PM2 expose the same port.
  */
 export const FIRST_INSTANCE_PORT = 3001;
-export const DEFAULT_PORT = 4000;
 
 export function resolvePort(): number {
   const explicitPort = Number(process.env.PORT);
@@ -25,7 +24,8 @@ export function resolvePort(): number {
     }
   }
 
-  return DEFAULT_PORT;
+  const apiPort = Number(process.env.API_PORT);
+  return Number.isFinite(apiPort) && apiPort > 0 ? apiPort : FIRST_INSTANCE_PORT;
 }
 
 /** The value reported by GET /health and used to prove load balancing. */

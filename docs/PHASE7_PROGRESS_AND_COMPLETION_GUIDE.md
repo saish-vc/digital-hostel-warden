@@ -8,20 +8,37 @@ writing `docs/DRY_RUN_REPORT_V2.md` — using the evidence collected below.
 machine; raw logs are in `C:\Users\saish\AppData\Local\Temp\v2-*.log` /
 `v2-*.cjs` / `v2-*.json` / `v2-h1-*.png`.
 
+> **AMENDMENT — 2026-11-20. The F3/F4 "Option B / DEFERRED" decision below is
+> superseded.** A later remediation reinstalled the nginx front door
+> (`backend/nginx.conf`, 1.31.8, :8080, round-robin over 3001/3002/3003 with
+> WebSocket upgrade and `proxy_next_upstream`) and put a Cloudflare quick
+> tunnel in front of it. F3 and F4 were re-run against that topology and both
+> **PASS**:
+>
+> - **F3:** with one instance stopped, the dashboard stayed `Live` and its
+>   socket moved `3001 → 3002`; the indicator never showed `Disconnected`.
+> - **F4:** with two instances down, `POST /alerts` through the proxy (and
+>   through the public tunnel) returned **201** via the survivor; `/health`
+>   listed the survivor's `instanceId`.
+>
+> Everything else in this file remains accurate as the 2026-11-09 record.
+> `docs/HANDOFF.md` §4/§7 and `docs/TUNNEL_SETUP.md` describe the current
+> topology.
+
 ---
 
 ## 1. What has been completed
 
 | Phase | Status | Output |
 |---|---|---|
-| 0–4 | COMPLETE | Reported at each stop point; Phase 4 Option B (F3/F4 = production-only, no nginx). |
+| 0–4 | COMPLETE | Reported at each stop point; Phase 4 Option B ~~(F3/F4 = production-only, no nginx)~~ **superseded 2026-11-20: nginx installed, F3/F4 PASS** (see the amendment above). |
 | 5 | COMPLETE | `docs/DEMO_SETUP.md` checklist written and verified. |
 | 6 | COMPLETE | False claims removed from `progress.md`, `docs/AUDIT.md`, `docs/DEMO_SCRIPT.md`, `docs/LOAD_TEST_RESULTS.md`; line citations re-pinned. |
 | 7 | **All 66 drills re-run** | **52 PASS / 0 FAIL / 11 SKIP / 1 N/A / 2 DEFERRED**. Only the V2 report file itself remains. |
 
-All 7 V1 FAILs are resolved: **E6, H1, J4, K6, K7 → FIXED**; **F3/F4 → DEFERRED**
-(production-only per the user's Option B decision). All 4 new findings are FIXED
-and verified (see §3).
+All 7 V1 FAILs are resolved: **E6, H1, J4, K6, K7 → FIXED**; **F3/F4 → were
+DEFERRED under Option B, now FIXED** via the nginx front door + tunnel
+(2026-11-20). All 4 new findings are FIXED and verified (see §3).
 
 ---
 
@@ -43,7 +60,7 @@ Legend for "Delta from V1": **FIXED** (was FAIL, now passes) · **DEFERRED** ·
 ### Block B — Realtime dashboard (6 PASS)
 | Drill | Actual | Verdict | Delta |
 |---|---|---|---|
-| B1 | Card rendered **32 ms** after POST, **exactly 1** oscillator (beep), GPS chip, `⏱ 60s` (K6: 31 ms, K7: 33 ms) | PASS | — |
+| B1 | Card rendered **32 ms** after POST, **exactly 1** oscillator (beep), GPS chip, `⏱ 60s` countdown (since deleted — see finding #4's note) (K6: 31 ms, K7: 33 ms) | PASS | — |
 | B2 | `Aarav Sharma · Room B-314 · FIRE · time` + countdown | PASS | — |
 | B3 | Acknowledge click → student socket `alert:updated ACKNOWLEDGED` in **38 ms** (K6) / **22 ms** (K7) | PASS | — |
 | B4 | ACKNOWLEDGED + acknowledged-at line survive reload | PASS | — |
@@ -81,13 +98,13 @@ Legend for "Delta from V1": **FIXED** (was FAIL, now passes) · **DEFERRED** ·
 | E8 | Ack after fire → 0 duplicates | PASS | — |
 | E9 | No Twilio console | SKIP | — |
 
-### Block F — Multi-instance (3 PASS / 2 DEFERRED)
+### Block F — Multi-instance (3 PASS / 2 DEFERRED at the time; both since PASS)
 | Drill | Actual | Verdict | Delta |
 |---|---|---|---|
 | F1 | `instanceId` 3001/3002/3003 distinct, all `ok` | PASS | — |
 | F2 | Cross-instance `alert:new` on 3001+3002 in **15/17 ms** | PASS | — |
-| F3 | No load balancer — reframed **PRODUCTION DEPLOYMENT ONLY** (user decision: Phase 4 Option B) | DEFERRED | **DEFERRED** |
-| F4 | Same root cause as F3 | DEFERRED | **DEFERRED** |
+| F3 | *(2026-11-09)* No load balancer — reframed **PRODUCTION DEPLOYMENT ONLY** (user decision: Phase 4 Option B). **Superseded 2026-11-20:** nginx front door installed; one instance stopped → dashboard stayed `Live`, socket moved `3001 → 3002` | **PASS (re-verified)** | **FIXED (was DEFERRED)** |
+| F4 | Same root cause as F3. **Superseded 2026-11-20:** two instances down → `POST /alerts` through :8080 and through the tunnel → **201** via the survivor; LB `/health` returned the survivor's id | **PASS (re-verified)** | **FIXED (was DEFERRED)** |
 | F5 | `pm2 restart 0` → :3001 `/health` 200 in **~3.9 s**; siblings 200 throughout; dashboard back to `Live`, 29 cards intact | PASS | — |
 
 ### Block G — Rate limiting & metrics auth (4 PASS)
@@ -122,7 +139,7 @@ Legend for "Delta from V1": **FIXED** (was FAIL, now passes) · **DEFERRED** ·
 | J1 | 0 ACKNOWLEDGED rows missing ack fields | PASS | — |
 | J2 | 0 RESOLVED rows missing `resolvedAt`/note | PASS | — |
 | J3 | 0 orphan device tokens | PASS | — |
-| J4 | Real `EXPLAIN (ANALYZE)` on the true UNION query: **A** (23 rows) Seq Scan + Sort, 1.600 ms — correct at demo size; **B** forced `enable_seqscan=off` → Index Scan on `idx_alerts_status_created`, 1.729 ms; **C** (5,023 rows) planner picks the index unforced — Incremental Sort with `Presorted Key: createdAt`, reads **26 rows to serve LIMIT 25**, 1.918 ms. `scripts/perf-seed.ts` cleaned up after itself (30→30 rows). Comment at `backend/src/routes/alert.routes.ts:475-533` matches all three. | PASS | **FIXED** |
+| J4 | Real `EXPLAIN (ANALYZE)` on the true UNION query: **A** (23 rows) Seq Scan + Sort, 1.600 ms — correct at demo size; **B** forced `enable_seqscan=off` → Index Scan on `idx_alerts_status_created`, 1.729 ms; **C** (5,023 rows) planner picks the index unforced — Incremental Sort with `Presorted Key: createdAt`, reads **26 rows to serve LIMIT 25**, 1.918 ms. `scripts/perf-seed.ts` cleaned up after itself (30→30 rows). Comment at `backend/src/routes/alert.routes.ts:481-560` matches all three. | PASS | **FIXED** |
 
 ### Block K — Demo readiness (7 PASS)
 | Drill | Actual | Verdict | Delta |
@@ -132,7 +149,7 @@ Legend for "Delta from V1": **FIXED** (was FAIL, now passes) · **DEFERRED** ·
 | K3 | Refuses `NODE_ENV=production`, exit 1 | PASS | — |
 | K4 | History: 8 columns; Resolved + today + `Diya` → **1 row** with the resolution note | PASS | — |
 | K5 | CSV: 8 columns + note, filter-aware (1 row) | PASS | — |
-| K6 | **Full script run 1 — every step performed as written**: 0:00 empty board ("No active alerts"); 0:30 card 31 ms + 1 beep; 1:30 ack, student socket 38 ms, `scheduled:false`; 2:15 fire at **60.1 s**, pill `⏱` → `Escalation pending…` → **`⚠️ ESCALATION FAILED`** (never "SMS sent"), resolve with 53-char note → RESOLVED + toast + student `RESOLVED` in 25 ms; 3:45 history 1 row / CSV / Resolved-tab banner `🔔 1 new pending alert` + View; 4:45 `bullmq_jobs{state="failed"}=0`, overrides 0, fired 0; 5:45 3 instanceIds + 4/4 targets; 6:30 Redis-down: 201 in 15 ms, degraded/503, recovery without API restart; 7:15 reset | PASS | **FIXED** |
+| K6 | **Full script run 1 — every step performed as written**: 0:00 empty board ("No active alerts"); 0:30 card 31 ms + 1 beep; 1:30 ack, student socket 38 ms, `scheduled:false`; 2:15 fire at **60.1 s**, pill `⏱` → `Escalation pending…` → **`⚠️ ESCALATION FAILED`** (never "SMS sent"; the countdown pill was deleted 2026-11-19 — today a failed send shows no pill + a toast), resolve with 53-char note → RESOLVED + toast + student `RESOLVED` in 25 ms; 3:45 history 1 row / CSV / Resolved-tab banner `🔔 1 new pending alert` + View; 4:45 `bullmq_jobs{state="failed"}=0`, overrides 0, fired 0; 5:45 3 instanceIds + 4/4 targets; 6:30 Redis-down: 201 in 15 ms, degraded/503, recovery without API restart; 7:15 reset | PASS | **FIXED** |
 | K7 | **Full script run 2** — same steps: 0:30 33 ms; 1:30 22 ms; 2:15 60.1 s, honest FAILED pill, resolve → student 19 ms; 3:45 1 row + CSV + banner + View; 4:45 all 0s; 5:45 3 ids; 6:30 worker-down: SOS 201 in 30 ms while worker stopped, job stayed `delayed` in Redis **past its due time**, fired **3.3 s after worker restart**; 7:15 reset | PASS | **FIXED** |
 
 ### Block L — Automated tests (2 PASS)
@@ -142,14 +159,14 @@ Legend for "Delta from V1": **FIXED** (was FAIL, now passes) · **DEFERRED** ·
 | L2 | PM2 stopped (ports 3001/3002 verified free), `npm test -- tests/multi-instance.test.ts` → **1 test passed, 2.018 s** (duration 4.98 s), including <500 ms cross-instance assertions | PASS | — |
 
 ### Tally vs V1
-| | V1 (2026-11-08) | V2 (this re-run) |
-|---|---|---|
-| PASS | 47 | **52** |
-| FAIL | 7 | **0** |
-| SKIP | 11 | 11 |
-| N/A | 1 | 1 |
-| DEFERRED | — | 2 (F3, F4) |
-| Total | 66 | 66 |
+| | V1 (2026-11-08) | V2 (this re-run) | V2 amended (2026-11-20) |
+|---|---|---|---|
+| PASS | 47 | **52** | **54** (F3/F4 re-verified after nginx was installed) |
+| FAIL | 7 | **0** | **0** |
+| SKIP | 11 | 11 | 11 |
+| N/A | 1 | 1 | 1 |
+| DEFERRED | — | 2 (F3, F4) | 0 |
+| Total | 66 | 66 | 66 |
 
 ---
 
@@ -157,10 +174,10 @@ Legend for "Delta from V1": **FIXED** (was FAIL, now passes) · **DEFERRED** ·
 
 | # | Finding | Fix | Verified by |
 |---|---|---|---|
-| 1 | No Resolve UI | Resolve button (ACKNOWLEDGED only) + dialog: submit disabled until **trimmed** note ≥10 chars (9→disabled, 10→"Minimum met", 13 raw/7 trimmed→"3 more characters required"); PENDING → 409; double-resolve idempotent | K6/K7 resolve steps + isolated drill |
+| 1 | No Resolve UI | Resolve button (ACKNOWLEDGED only) + dialog: submit disabled until the **trimmed** note is long enough (3 chars since 2026-11-19; this 2026-11-09 run required 10 — the limit was loosened, the audit-trail intent is unchanged); PENDING → 409; double-resolve idempotent | K6/K7 resolve steps + isolated drill |
 | 2 | Resolved filter hides new PENDING | Red banner `🔔 1 new pending alert` + View + ✕ on any non-Active tab; alarm still beeps | K6/K7 3:45 + isolated drill |
 | 3 | Grafana metrics not reset on `demo:reset` | Reset restarts api+worker via PM2 (counters live in the process) | All counters read **0** on :3001/:3002/:3003/:4001 after reset; Grafana queries 0 |
-| 4 | "SMS sent" pill lies when the worker fails | Server-driven pill: worker → `POST /internal/escalation-result` → `alert:escalation-failed` → pill shows `⚠️ ESCALATION FAILED` | E2/K6/K7: failed at 60.1 s; pill never said "SMS sent" |
+| 4 | "SMS sent" pill lies when the worker fails | Server-driven escalation state: worker writes `escalatedAt` after provider confirmation, relays the outcome to `POST /internal/escalation-result` → `alert:escalated` / `alert:escalation_failed` (renamed from `escalation-failed`); pill renders `SMS sent` **only** from `escalatedAt`; a failed send shows no pill and a one-off "Escalation SMS failed" toast (the 2026-11-09 build showed a red "ESCALATION FAILED" pill — superseded 2026-11-19) | E2/K6/K7: failed at 60.1 s; pill never said "SMS sent" |
 
 ---
 
@@ -173,7 +190,11 @@ Legend for "Delta from V1": **FIXED** (was FAIL, now passes) · **DEFERRED** ·
 - ✅ J4 claim matches reality (three measured plans, comment updated).
 - ✅ H1 panels show 0 / static text (both variants, screenshots).
 - ✅ Grafana metrics reset on `demo:reset` (0 on every instance).
-- ✅ F3/F4 reframed and removed from the demo script (marked PRODUCTION DEPLOYMENT ONLY; "Do not kill an API instance on stage").
+- ✅ F3/F4 were reframed as DEFERRED under Option B on 2026-11-09; **they are
+  now FIXED** — nginx is installed, the tunnel fronts :8080, and both drills
+  re-ran PASS on 2026-11-20 (see the amendment at the top of this file and
+  `docs/HANDOFF.md` §4). `docs/DEMO_SCRIPT.md` 5:45 demonstrates the failover
+  through the proxy again.
 - ✅ All originally-PASS drills still PASS (52 PASS includes all 47).
 
 **Verdict: GO for the demo as scripted** in this environment, subject to the
@@ -238,8 +259,9 @@ Stage-safe wording lives in `progress.md` §4.
 >    Copy the actual outputs from the guide's §2 verbatim — they are the
 >    verification evidence (the brief requires actual output, not "should work").
 > 4. A "Critical failures resolved" section: E6, K6/K7 (with the V1 failure
->    detail vs the V2 measured result), H1, J4; F3/F4 DEFERRED with the user's
->    Phase 4 Option B decision cited.
+>    detail vs the V2 measured result), H1, J4; F3/F4 — historically DEFERRED
+>    under Option B, **now FIXED**: nginx front door + Cloudflare tunnel,
+>    re-verified 2026-11-20 (see the amendment at the top of this file).
 > 5. A "New findings" section: the 4 findings, all FIXED, with their
 >    verification pointers (guide §3).
 > 6. A "Guarantee #3 deviation" section quoting the scope note from
@@ -264,8 +286,9 @@ Stage-safe wording lives in `progress.md` §4.
 >      (set the header inside `requestId()` before pino reads it) or keep the
 >      documented proxy-only limitation.
 > 10. End with the same "Green light verdict" style as V1 §7 but GO, listing
->     what is solid and the remaining caveats (Twilio/FCM/emulator/git/nginx
->     unconfigured; cross-instance fan-out pauses during a Redis outage).
+>     what is solid and the remaining caveats (Twilio/FCM/emulator/git
+>     unconfigured; nginx + tunnel now handle F3/F4; cross-instance fan-out
+>     pauses during a Redis outage).
 >
 > Then report completion to the user with the stop-point table format
 > ("PHASE X COMPLETE. Verification results: [table]. ... Blockers: none.") for

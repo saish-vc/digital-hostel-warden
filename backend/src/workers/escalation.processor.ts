@@ -19,6 +19,7 @@ async function notifyEscalationResult(
   alertId: string,
   studentId: string,
   outcome: 'sent' | 'failed',
+  at: Date = new Date(),
 ): Promise<void> {
   const base = process.env.INTERNAL_API_URL;
   const token = process.env.METRICS_TOKEN;
@@ -40,7 +41,7 @@ async function notifyEscalationResult(
             alertId,
             studentId,
             outcome,
-            at: new Date().toISOString(),
+            at: at.toISOString(),
           }),
           signal: AbortSignal.timeout(2_000),
         },
@@ -137,7 +138,22 @@ export async function processEscalationJob(
   // METRIC: the escalation guarantee was exercised end to end.
   escalationsFiredTotal.inc();
 
-  await notifyEscalationResult(alert.id, alert.studentId, 'sent');
+  // Must not throw: the SMS already went out, and a failed job here would
+  // mislabel a delivered escalation as failed.
+  const escalatedAt = new Date();
+  try {
+    await prisma.emergencyAlert.update({
+      where: { id: alert.id },
+      data: { escalatedAt },
+    });
+  } catch (error) {
+    logger.error(
+      { alertId, err: error instanceof Error ? error.message : error },
+      '[escalation] SMS sent but escalatedAt write failed',
+    );
+  }
+
+  await notifyEscalationResult(alert.id, alert.studentId, 'sent', escalatedAt);
 
   // Delivery receipt — this is the audit trail of the escalation.
   logger.info(

@@ -3,13 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Android emulator reaches the host machine through 10.0.2.2.
-/// For a physical device or iOS simulator, override it:
-///   flutter run --dart-define=API_URL=http://192.168.1.20:4000
-const String kApiBaseUrl = String.fromEnvironment(
-  'API_URL',
-  defaultValue: 'http://10.0.2.2:4000',
-);
+import '../config.dart';
 
 class ApiException implements Exception {
   ApiException(this.message, {this.statusCode, this.retryAfterSeconds});
@@ -37,7 +31,7 @@ class ApiService {
 
   static Future<Map<String, dynamic>> login(String email, String password) async {
     final response = await http.post(
-      Uri.parse('$kApiBaseUrl/auth/login'),
+      Uri.parse('${AppConfig.apiBase}/auth/login'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'email': email,
@@ -88,7 +82,7 @@ class ApiService {
     }
 
     final response = await http.post(
-      Uri.parse('$kApiBaseUrl/alerts'),
+      Uri.parse('${AppConfig.apiBase}/alerts'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -140,7 +134,7 @@ class ApiService {
       throw ApiException('Not logged in');
     }
 
-    final uri = Uri.parse('$kApiBaseUrl$path');
+    final uri = Uri.parse('${AppConfig.apiBase}$path');
     final headers = <String, String>{
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $token',

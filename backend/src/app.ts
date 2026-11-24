@@ -63,7 +63,14 @@ export interface AppBundle {
 export function createApp(): AppBundle {
   const app = express();
   const httpServer = http.createServer(app);
-  const corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:5173';
+  const allowedOrigins = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    process.env.DASHBOARD_ORIGIN,
+    ...(process.env.CORS_ORIGIN ?? '').split(','),
+  ]
+    .map((origin) => origin?.trim())
+    .filter((origin): origin is string => Boolean(origin));
 
   // nginx terminates TLS and proxies on the same host — trust its
   // X-Forwarded-For/Proto. express-rate-limit v8 validates this setting
@@ -98,17 +105,13 @@ export function createApp(): AppBundle {
   app.use(helmet({ contentSecurityPolicy: false }));
 
   // -- 4. Locked CORS --------------------------------------------------------
-  // CORS_ORIGIN accepts a comma-separated allowlist. Every non-listed web
-  // origin is REJECTED with a logged, visible reason (cors_origin_rejected
-  // in the logs) — callback(null, false) omits the Access-Control-Allow-*
-  // headers and the browser's console shows the refusal, which IS the
-  // clear error. Requests with NO Origin header (curl, load balancer
-  // probes, native Flutter HTTP) pass: Origin is only present on browsers.
-  const allowedOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:5173,http://localhost:5174')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
+  // Allowlist = Vite dev origins + DASHBOARD_ORIGIN + comma-separated
+  // CORS_ORIGIN (production hosts). No wildcard and no NODE_ENV bypass.
+  // Every non-listed web origin is REJECTED with a logged, visible reason
+  // (cors_origin_rejected in the logs) — callback(null, false) omits the
+  // Access-Control-Allow-* headers and the browser's console shows the
+  // refusal. Requests with NO Origin header (curl, load balancer probes,
+  // native Flutter HTTP) pass: Origin is only present on browsers.
   app.use(
     cors({
       origin: (origin, callback) => {
@@ -116,7 +119,7 @@ export function createApp(): AppBundle {
           callback(null, true);
           return;
         }
-        if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+        if (allowedOrigins.includes(origin)) {
           callback(null, true);
           return;
         }
@@ -279,7 +282,7 @@ export function createApp(): AppBundle {
 
   const io = new Server(httpServer, {
     cors: {
-      origin: corsOrigin,
+      origin: allowedOrigins,
       credentials: true,
     },
   });

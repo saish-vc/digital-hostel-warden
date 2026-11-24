@@ -17,7 +17,7 @@
 
 HostelGuard (Flutter student SOS app + React warden dashboard + Node/Express/
 Socket.IO backend + Postgres/Prisma + Redis/BullMQ + FCM + Twilio + Prometheus/
-Grafana) is **feature-complete and passes 74/74 automated tests** (1 opt-in
+Grafana) is **feature-complete and passes 80/81 automated tests** (1 opt-in
 index test skipped by default). V1 was a 66-drill dry run with **47 PASS /
 7 FAIL / 11 SKIP / 1 N/A → NO-GO**. All 7 FAILs and all 4 new findings have
 since been fixed and verified: E6 fail-open SOS path, Resolve UI, new-alert
@@ -59,20 +59,23 @@ Full per-drill tables, actual outputs and the `Delta from V1` column:
 ### The 4 new findings — all fixed
 
 1. **No Resolve UI.** Resolve button (ACKNOWLEDGED only) opens a dialog;
-   *Submit resolution* stays disabled until the trimmed note is ≥10 chars
+   *Submit resolution* stays disabled until the trimmed note is ≥3 chars
    (max 500). Verified end-to-end in the UI: `Case resolved`, note in the
    detail pane and in Postgres.
 2. **Resolved filter hid a new PENDING SOS.** Red banner
-   `🔔 1 new pending alert` with **View** and **✕** on any non-Active tab;
-   alarm still beeps. Measured **88 ms** from POST to banner.
+   `🔔 1 new pending` with **View** and **✕** on any non-Active tab;
+   alarm still beeps. Measured **88 ms** from POST to banner in V2, **121 ms**
+   in the Phase 2 re-check.
 3. **Grafana metrics did not reset on `demo:reset`.** Reset restarts api +
    worker via PM2, which zeroes the in-process counters. Post-reset panels:
    failed jobs 0, overrides 0, SOS rate 0, fired 0, cancelled 0.
 4. **"SMS sent" pill was a client-side timer that lied.** The worker now
-   relays the true outcome to `POST /internal/escalation-result`; the API emits
-   `alert:escalated` / `alert:escalation-failed`; the pill renders the receipt.
-   Verified both branches: relay → `SMS SENT`; real 60 s worker failure
-   (`SMS is not configured`) → `⚠️ ESCALATION FAILED`.
+   writes `escalatedAt` only after the provider confirms, then relays the
+   outcome to `POST /internal/escalation-result`; the API emits
+   `alert:escalated` / `alert:escalation_failed`; the pill renders **only**
+   from `escalatedAt`. Verified both branches: success → `SMS SENT HH:MM:SS`
+   and `escalatedAt` set; real 60 s worker failure (`SMS is not configured`)
+   → **no pill**, `escalatedAt` NULL, and an "Escalation SMS failed" toast.
 
 ### The 9 SKIPs (environment-limited, reasoned) + 1 N/A
 
@@ -90,16 +93,19 @@ deployment target — `docs/DEMO_SETUP.md` is the checklist.
 ## 3. State After the Fixes
 
 - `ESCALATION_DELAY_MS=60000`; Alertmanager rule `rate(...[5m]) > 0.1 for 10m`.
-- Prometheus **4/4 targets up** (api ×3 + worker); Alertmanager clear.
-- PM2: `api` ×3 cluster (:3001/:3002/:3003) + `worker` ×1 fork (:4001).
-- nginx **2 workers**, listening on **:8080** (see §4).
+- Prometheus **5/5 targets up** (api ×3 + worker + leave-worker); Alertmanager clear.
+- PM2: `api` ×3 cluster (:3001/:3002/:3003) + `worker` ×1 fork (metrics :4001)
+  + `leave-worker` ×1 fork (metrics :4002).
+- nginx **2 workers**, listening on **:8080** (see §4), with a Cloudflare quick
+  tunnel in front for clients on other networks.
 - DB: **3 RESOLVED / 0 active**; 502 students (500 loadtest + 2 seed);
   5 wardens; escalation queue empty.
-- Dashboard: Vite on **:5173**, `VITE_API_URL="http://localhost:8080"`,
-  connection indicator `Live`.
-- Git: baseline commit `1083575`, `core.hooksPath=.husky`,
-  `gitleaks 8.30.1`, staged + full-history scans **0 findings**.
-- Flutter: no Android emulator (Windows/Chrome/Edge only).
+- Dashboard: Vite on **:5173**, `VITE_API_URL` pointing at :8080 (or at the
+  tunnel URL for cross-network demos), connection indicator `Live`.
+- Git: HEAD `f3fb785`, 230 tracked files, `core.hooksPath=.husky`,
+  `gitleaks 8.30.1`, staged + full-history scans **0 findings**, pre-commit
+  probe **blocked** (exit 1).
+- Flutter: no Android emulator (Windows/Chrome/Edge only); `adb` still absent.
 
 ---
 
@@ -107,17 +113,22 @@ deployment target — `docs/DEMO_SETUP.md` is the checklist.
 
 | Component | Status | Notes |
 |---|---|---|
-| PM2 | Online | 7.1.2; api ×3 cluster + worker ×1 fork |
-| Postgres | Online | Docker `backend-postgres-1`, DB `hostel_emergency`, migrations applied |
+| PM2 | Online | api ×3 cluster + worker ×1 fork (:4001) + leave-worker ×1 fork (:4002) |
+| Postgres | Online | Docker `backend-postgres-1`, DB `hostel_emergency`, 7 migrations applied |
 | Redis | Online | Docker `backend-redis-1`, DB 0 app / DB 1 tests |
-| Prometheus | Online | :9090, scrapes all 4 targets every 15 s |
+| Prometheus | Online | :9090, scrapes all 5 targets every 15 s |
 | Alertmanager | Online | :9093 |
 | Grafana | Online | :3000, admin/admin, 9-panel default dashboard + configured variant |
-| nginx | Online | 1.31.8 via `winget` (`nginxinc.nginx`), :8080 |
-| Warden dashboard | Online | Vite :5173, `VITE_API_URL=http://localhost:8080` |
-| Twilio | **Not configured** | Escalation fails honestly with `SMS is not configured` |
+| nginx | Online | 1.31.8 via `winget` (`nginxinc.nginx`), :8080, round-robin + WS upgrade |
+| Cloudflare tunnel | Online | quick tunnel → `http://localhost:8080`; URL lives in `.env` only, never in git (`docs/TUNNEL_SETUP.md`) |
+| Warden dashboard | Online | Vite :5173, `VITE_API_URL` required (fails fast if unset) |
+| Twilio | **Not configured** | Escalation fails honestly with `SMS is not configured`; `SMS_PROVIDER=mock` covers the dev path |
 | FCM | **Not configured** | Push skipped; socket path is primary |
 | Android emulator | **Not installed** | C4/C5 remain SKIP |
+
+Both `backend/.env` and `.env.example` set `ENABLE_HTTPS_REDIRECT=false`: TLS
+terminates at Cloudflare/nginx, the nginx→API hop is plain HTTP, and an enabled
+redirect would 308 every request (`docs/DEMO_SETUP.md` §6 — drill I5 is N/A).
 
 **nginx start command.** `nginx` on PATH is a winget shim. The config is
 `backend/nginx.conf`. Keep it in its own terminal; daemon mode dies with the
@@ -130,6 +141,17 @@ nginx -p $prefix -c "$PWD\backend\nginx.conf" -g "daemon off;"
 
 Verify: `1..6 | % { (curl.exe -s localhost:8080/health | ConvertFrom-Json).instanceId }`
 should repeat 3001/3002/3003.
+
+**Public endpoint (cross-network).** For a phone on cellular or another Wi-Fi,
+run a Cloudflare tunnel to the proxy — never to a single instance, or F3/F4 stop
+holding:
+
+```bash
+./.tools/cloudflared.exe tunnel --no-autoupdate --url http://localhost:8080
+```
+
+The URL changes on every quick-tunnel start and belongs in `.env` files only
+(`docs/TUNNEL_SETUP.md`; the named-tunnel variant gives a stable hostname).
 
 **Which Redis/Postgres?** This machine has two sets. The demo database lives in
 `backend-postgres-1`; the queue lives in `backend-redis-1`. `hostel-redis` /
@@ -154,10 +176,10 @@ the ones in use.
 Verification highlights (actual output, this machine):
 
 ```
-npm test                                 9 files / 74 passed / 1 skipped
-npm test -- tests/multi-instance.test.ts 1 passed (4.014 s)
+npm test                                 80 passed, 1 skipped (81 total)
+npm test -- tests/multi-instance.test.ts 1 passed (~4.8 s)
 gitleaks git --staged --config .gitleaks.toml   no leaks found
-gitleaks git --config .gitleaks.toml            no leaks found
+gitleaks git --config .gitleaks.toml            no leaks found (11 commits)
 node backend/scripts/secret-scan-check.cjs      CLEAN — 0 hits
 ```
 
@@ -214,7 +236,9 @@ Fix-specific decisions:
 | 4 | Student never blocked from SOS by rate limiting | ✅ PASS | 6th SOS → 201, `sos_overrides_total` 0→1, `sos_rate_limit_overridden` logged (G2); limiters fail open on Redis errors |
 | 5 | Cross-instance broadcast <500 ms (Redis healthy) | ✅ PASS | F2: 15–55 ms across runs; Phase 2 probe: 4–8 ms; automated test asserts <500 ms |
 | 6 | Stale FCM token deleted on next send | ✅ PASS | Unit-proven with a mock; no real device (D1–D4/D6 SKIP) |
-| 7 | No secret in git history or logs | ✅ **VERIFIED** | gitleaks staged **0**, full history **0**; repo scanner CLEAN; only `.env.example` files tracked |
+| 7 | No secret in git history or logs | ✅ **VERIFIED** | gitleaks staged **0**, full history **0** over 11 commits / 230 files; repo scanner CLEAN; probe commit **blocked** (exit 1, HEAD unchanged); only `.env.example` files tracked |
+| 8 | Dashboard never claims an SMS was sent without provider confirmation | ✅ PASS | Pill renders only from server `escalatedAt` (written after the provider confirms); failed send leaves `escalatedAt` NULL, shows the "Escalation SMS failed" toast, and `escalations_fired_total` stays 0. No client-side timer remains |
+| 9 | A network outage of one API instance does not take the wardens offline | ✅ PASS | F3/F4 through nginx: two instances stopped, dashboard stayed `Live` and its socket moved 3001 → 3002; `POST /alerts` through :8080 returned 201 via the survivor |
 
 Guarantees #3 and #5 cannot both be absolute during a Redis outage. Say so.
 
@@ -257,11 +281,15 @@ Guarantees #3 and #5 cannot both be absolute during a Redis outage. Say so.
 1. **Read `docs/DRY_RUN_REPORT_V2.md`.** It is the authoritative result set;
    this file is the orientation.
 2. **Rehearse the script twice** (`docs/DEMO_SCRIPT.md`) with the nginx
-   topology running. The pre-flight starts nginx and points Vite at :8080.
+   topology running. The pre-flight starts nginx and points Vite at :8080. If
+   the student phone is on a different network, also start the Cloudflare
+   tunnel to :8080, set `VITE_API_URL` and the Flutter `API_BASE_URL` to the
+   tunnel URL, and restart Vite — a quick-tunnel URL changes on every start
+   (`docs/TUNNEL_SETUP.md`).
 3. **Configure Twilio + FCM + an Android emulator** using
    `docs/DEMO_SETUP.md` §1–§3. That converts E2 delivery/E9, D1–D4/D6 and
-   C4/C5 from SKIP to runnable. Nothing in the current environment can
-   substitute for those credentials/devices.
+   C4/C5 from SKIP to runnable. Without Twilio but with time to spare, §1.2b's
+   `SMS_PROVIDER=mock` exercises the escalation path (dev only).
 4. **Re-run Group 8 "two runs in a row"** with real Twilio and FCM — the actual
    demo rehearsal, not another dry run.
 5. **Print the stage copy** from `DEMO_SCRIPT.md`; keep the rehearsal notes
@@ -355,11 +383,13 @@ Use #8 and #10 only because they are now measured; do not upgrade #10 to
 | V1 historical report (do not edit) | `docs/DRY_RUN_REPORT.md` |
 | Setup that is not code (Twilio/FCM/Android/nginx) | `docs/DEMO_SETUP.md` |
 | Presenter runbook | `docs/DEMO_SCRIPT.md` |
-| J4 plans | `backend/src/routes/alert.routes.ts:475-533`, `backend/explain.sql`, `backend/scripts/perf-seed.ts` |
+| J4 plans | `backend/src/routes/alert.routes.ts:481-560`, `backend/explain.sql`, `backend/scripts/perf-seed.ts` |
 | Opt-in index test | `backend/tests/index.test.ts` (`RUN_INDEX_TEST=true npm test -- tests/index.test.ts`) |
 | Multi-instance test | `backend/tests/multi-instance.test.ts` (stop PM2 first) |
 | nginx config | `backend/nginx.conf` |
+| Public endpoint / tunnel | `docs/TUNNEL_SETUP.md` (quick + named tunnel, nginx variant, verification) |
 | Secret scan | `.gitleaks.toml`, `.husky/pre-commit`, `backend/scripts/secret-scan-check.cjs` |
+| HTTPS-redirect drill (I5, N/A) | `docs/DEMO_SETUP.md` §6, `backend/src/middleware/httpsRedirect.ts` |
 | Security review | `docs/AUDIT.md` |
 | Load test | `docs/LOAD_TEST_RESULTS.md` |
 

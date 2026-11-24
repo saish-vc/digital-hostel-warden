@@ -113,15 +113,38 @@ async function sendViaTwilio(alert: EscalationSmsAlert, to: string): Promise<Sms
 }
 
 /**
+ * Dev/demo stand-in. Refused under NODE_ENV=production: a mock that reports
+ * success would turn a misconfigured deploy into silently missed escalations.
+ * SMS_MOCK_OUTCOME=fail exercises the failure path end to end.
+ */
+function sendViaMock(alert: EscalationSmsAlert): SmsResult {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SMS_PROVIDER=mock is refused when NODE_ENV=production');
+  }
+  if (process.env.SMS_MOCK_OUTCOME === 'fail') {
+    smsSentTotal.inc({ status: 'failed' });
+    throw new Error('mock SMS failure (SMS_MOCK_OUTCOME=fail)');
+  }
+
+  smsSentTotal.inc({ status: 'success' });
+  const result = { receiptId: `MOCK-${alert.id}`, to: 'mock' };
+  logger.info(result, `[sms] MOCK escalation SMS for alert ${alert.id} (nothing sent)`);
+  return result;
+}
+
+/**
  * Send the escalation SMS to the on-call warden number.
  * Returns the provider receipt id (Twilio message SID); failures throw so
  * BullMQ marks the job failed. Credentials are never logged.
  */
 export async function sendEscalationSms(alert: EscalationSmsAlert): Promise<SmsResult> {
   const provider = (process.env.SMS_PROVIDER ?? 'twilio').toLowerCase();
+  if (provider === 'mock') {
+    return sendViaMock(alert);
+  }
   if (provider !== 'twilio') {
     throw new Error(
-      `SMS_PROVIDER=${provider} is not implemented yet (only "twilio")`,
+      `SMS_PROVIDER=${provider} is not implemented yet (only "twilio" or "mock")`,
     );
   }
 

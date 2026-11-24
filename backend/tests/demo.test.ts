@@ -111,7 +111,7 @@ describe('PATCH /alerts/:id/resolve', () => {
     });
   });
 
-  it('validates the resolution note (10-500 chars)', async () => {
+  it('validates the resolution note (3-500 chars)', async () => {
     const id = await makeAlert('PENDING');
     const ack = await request(server.app)
       .patch(`/alerts/${id}/acknowledge`)
@@ -188,6 +188,25 @@ describe('PATCH /alerts/:id/resolve', () => {
 
     const payload = await updated;
     expect(payload).toMatchObject({ id, status: 'RESOLVED' });
+  });
+
+  it('broadcasts alert:resolved to wardens with the trimmed note', async () => {
+    const id = await makeAlert('ACKNOWLEDGED');
+
+    const wardenSocket = await connectAs(server.url, warden2Token);
+    sockets.push(wardenSocket);
+    const resolved = waitForEvent<{ id: string; status: string; resolutionNote: string }>(
+      wardenSocket,
+      'alert:resolved',
+    );
+
+    const response = await request(server.app)
+      .patch(`/alerts/${id}/resolve`)
+      .set('Authorization', bearer(wardenToken))
+      .send({ resolutionNote: '  done  ' });
+    expect(response.status).toBe(200);
+
+    expect(await resolved).toMatchObject({ id, status: 'RESOLVED', resolutionNote: 'done' });
   });
 });
 

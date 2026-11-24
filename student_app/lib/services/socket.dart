@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as sio;
 
-import 'api.dart';
+import '../config.dart';
 
 /// One socket per app process. The backend joins the socket to
 /// `student:<id>` automatically based on the JWT.
@@ -21,7 +21,7 @@ class SocketService {
     disconnect();
 
     final socket = sio.io(
-      kApiBaseUrl,
+      AppConfig.socketUrl,
       sio.OptionBuilder()
           // WebSocket-only on purpose: no HTTP long-polling means no sticky
           // session is needed at the load balancer. The connection stays

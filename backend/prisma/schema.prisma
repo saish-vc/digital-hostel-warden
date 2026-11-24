@@ -116,6 +116,8 @@ model EmergencyAlert {
   acknowledgedByWarden Warden?   @relation(fields: [acknowledgedBy], references: [id])
   resolvedAt           DateTime?
   resolutionNote       String?
+  // Written by the worker only after the SMS provider confirmed the send.
+  escalatedAt          DateTime?
 
   @@index([status, createdAt(sort: Desc)], map: "idx_alerts_status_created")
   @@index([studentId], map: "idx_alerts_student")

@@ -58,7 +58,7 @@ router.post('/escalation-result', (req, res) => {
       ? at
       : new Date().toISOString();
 
-  const event = outcome === 'sent' ? 'alert:escalated' : 'alert:escalation-failed';
+  const event = outcome === 'sent' ? 'alert:escalated' : 'alert:escalation_failed';
   const payload = { alertId, sentAt, outcome };
 
   const io = getIO();

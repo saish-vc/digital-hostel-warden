@@ -1,16 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { io } from 'socket.io-client';
-import { API_URL, api, fetchAlerts, getToken } from '../api/client';
+import { api, fetchAlerts, getToken } from '../api/client';
 import type { Alert } from '../api/client';
 import { playBeepForAlert } from '../lib/beep';
-
-/** Dry-run aid; absent from a production build so no timer runs there. */
-export const DEBUG_ESCALATION = import.meta.env.VITE_DEBUG_ESCALATION === 'true';
-
-/** Must match the backend's ESCALATION_DELAY_MS. Visual only — see below. */
-export const ESCALATION_WINDOW_S = Number(
-  import.meta.env.VITE_ESCALATION_WINDOW_S ?? 60,
-);
+import { socket } from '../lib/socket';
 
 interface EscalationEvent {
   alertId: string;
@@ -18,51 +10,34 @@ interface EscalationEvent {
   outcome: 'sent' | 'failed';
 }
 
+export interface EscalationFailure {
+  alertId: string;
+  at: string;
+}
+
 /**
  * Live socket feed for the warden board.
  *
- * Server contract: `alert:new` goes to the `wardens` room, `alert:updated` to
- * `wardens` + `student:{id}`, and `alert:escalated` / `alert:escalation-failed`
- * carry the worker's REAL SMS outcome (the pill no longer guesses at 60s).
- * Exposed state:
- *
- * - `connected`  — socket transport state (feeds the ConnectionIndicator)
- * - `error`      — last connect/fetch error (a red indicator, not a toast)
- * - `refresh`    — re-runs GET /alerts (the header's Refresh button)
- * - `lastNewAlertId` — the id of the newest `alert:new`, so the board can
- *                      scroll to + flash that card exactly once
- * - `escalationUnconfirmed` — PENDING alerts past the window with no word from
- *                             the worker. Debug-only, always 0 in production.
+ * Server contract: `alert:new` → `wardens`; `alert:updated` (acknowledge) →
+ * `wardens` + `student:{id}`; `alert:resolved` → `wardens`;
+ * `alert:escalated` / `alert:escalation_failed` carry the worker's real SMS
+ * outcome. The pill reads `escalatedAt` from the API row, so it survives a
+ * reload and is never inferred from a client-side timer.
  */
 export function useAlertSocket() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastNewAlertId, setLastNewAlertId] = useState<string | null>(null);
-  const [escalationUnconfirmed, setEscalationUnconfirmed] = useState(0);
+  const [lastEscalationFailure, setLastEscalationFailure] =
+    useState<EscalationFailure | null>(null);
 
   // Read synchronously by resolve() to roll back an optimistic update.
   const alertsRef = useRef<Alert[]>([]);
   alertsRef.current = alerts;
 
   const refresh = useCallback(async () => {
-    const data = await fetchAlerts();
-    // Keep the worker-reported outcome across a manual refresh: the API
-    // cannot return it, so dropping it would reset a confirmed pill to
-    // "unconfirmed".
-    const known = new Map(alertsRef.current.map((item) => [item.id, item]));
-    setAlerts(
-      data.map((alert) => {
-        const prior = known.get(alert.id);
-        return prior
-          ? {
-              ...alert,
-              escalatedAt: prior.escalatedAt ?? null,
-              escalationFailedAt: prior.escalationFailedAt ?? null,
-            }
-          : alert;
-      }),
-    );
+    setAlerts(await fetchAlerts());
     setError(null);
   }, []);
 
@@ -76,17 +51,12 @@ export function useAlertSocket() {
       if (!cancelled) setError(err.message);
     });
 
-    const socket = io(API_URL, {
-      auth: { token },
-      // WebSocket-only is a deliberate deployment decision:
-      //  - no HTTP long-polling fallback => no sticky-session requirement at
-      //    the load balancer (see backend/nginx.conf);
-      //  - one TCP connection pinned to one instance for its lifetime, so the
-      //    Redis adapter handles cross-instance fan-out;
-      //  - the hostel network is closed and known, so the polling fallback
-      //    buys nothing for the demo.
-      transports: ['websocket'],
-    });
+    const replace = (alert: Alert) =>
+      setAlerts((previous) =>
+        previous.map((item) => (item.id === alert.id ? alert : item)),
+      );
+
+    socket.connect();
 
     socket.on('connect', () => {
       setConnected(true);
@@ -113,44 +83,24 @@ export function useAlertSocket() {
       playBeepForAlert(alert.id);
     });
 
-    socket.on('alert:updated', (alert: Alert) => {
-      setAlerts((previous) =>
-        previous.map((item) =>
-          item.id === alert.id
-            ? {
-                ...alert,
-                // The API has no column for these, so an authoritative
-                // update must not erase what the worker already told us.
-                escalatedAt: item.escalatedAt ?? null,
-                escalationFailedAt: item.escalationFailedAt ?? null,
-              }
-            : item,
-        ),
-      );
-    });
+    socket.on('alert:updated', replace);
+    socket.on('alert:resolved', replace);
 
     socket.on('alert:escalated', (event: EscalationEvent) => {
       setAlerts((previous) =>
         previous.map((item) =>
-          item.id === event.alertId
-            ? { ...item, escalatedAt: event.sentAt, escalationFailedAt: null }
-            : item,
+          item.id === event.alertId ? { ...item, escalatedAt: event.sentAt } : item,
         ),
       );
     });
 
-    socket.on('alert:escalation-failed', (event: EscalationEvent) => {
-      setAlerts((previous) =>
-        previous.map((item) =>
-          item.id === event.alertId
-            ? { ...item, escalationFailedAt: event.sentAt }
-            : item,
-        ),
-      );
+    socket.on('alert:escalation_failed', (event: EscalationEvent) => {
+      setLastEscalationFailure({ alertId: event.alertId, at: event.sentAt });
     });
 
     return () => {
       cancelled = true;
+      socket.removeAllListeners();
       socket.disconnect();
     };
   }, [refresh]);
@@ -195,15 +145,7 @@ export function useAlertSocket() {
           body: JSON.stringify({ resolutionNote }),
         });
         setAlerts((previous) =>
-          previous.map((item) =>
-            item.id === updated.id
-              ? {
-                  ...updated,
-                  escalatedAt: item.escalatedAt ?? null,
-                  escalationFailedAt: item.escalationFailedAt ?? null,
-                }
-              : item,
-          ),
+          previous.map((item) => (item.id === updated.id ? updated : item)),
         );
         return updated;
       } catch (err) {
@@ -215,29 +157,6 @@ export function useAlertSocket() {
     [refresh],
   );
 
-  // Dry-run counter: how many PENDING alerts are past the window with no word
-  // from the worker. Gated so a production build never runs this interval.
-  useEffect(() => {
-    if (!DEBUG_ESCALATION) {
-      return;
-    }
-    const count = () => {
-      const cutoff = Date.now() - ESCALATION_WINDOW_S * 1000;
-      setEscalationUnconfirmed(
-        alertsRef.current.filter(
-          (alert) =>
-            alert.status === 'PENDING' &&
-            new Date(alert.createdAt).getTime() <= cutoff &&
-            !alert.escalatedAt &&
-            !alert.escalationFailedAt,
-        ).length,
-      );
-    };
-    count();
-    const timer = window.setInterval(count, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   return {
     alerts,
     connected,
@@ -246,6 +165,6 @@ export function useAlertSocket() {
     resolve,
     refresh,
     lastNewAlertId,
-    escalationUnconfirmed,
+    lastEscalationFailure,
   };
 }

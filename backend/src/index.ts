@@ -14,10 +14,11 @@ import { closeRateLimiter } from './middleware/rateLimiters';
 import { escalationQueue } from './queues/escalation.queue';
 
 const PORT = resolvePort();
-const CORS_ORIGIN = process.env.CORS_ORIGIN ?? 'http://localhost:5173';
+// Every interface, not loopback: the tunnel, LAN phones and nginx must reach it.
+const HOST = '0.0.0.0';
 
 logger.info(
-  { port: PORT, corsOrigin: CORS_ORIGIN, redis: process.env.REDIS_URL ?? '(default)' },
+  { host: HOST, port: PORT, redis: process.env.REDIS_URL ?? '(default)' },
   '[api] booting',
 );
 
@@ -80,9 +81,9 @@ if (process.env.NODE_ENV === 'production' && !process.env.METRICS_TOKEN) {
   );
 }
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, HOST, () => {
   logger.info(
-    { port: PORT, instanceId: instanceId() },
+    { host: HOST, port: PORT, instanceId: instanceId() },
     '[api] listening (Socket.IO Redis adapter attached, pub + sub)',
   );
 });

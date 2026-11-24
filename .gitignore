@@ -19,3 +19,8 @@ firebase-service-account.json
 
 # Project-local k6 binary for load-test/sos.js (downloaded, not committed).
 .k6/
+
+# Cloudflare tunnel: credentials JSON + config live in ~/.cloudflared/; never
+# commit a copy. .tools/ holds the downloaded cloudflared binary.
+.cloudflared/
+.tools/

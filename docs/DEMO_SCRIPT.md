@@ -21,14 +21,19 @@ their evidence do not fit on two pages.)
 > 1.31.8 on **:8080** fronting those three instances; containers
 > `backend-postgres-1` and `backend-redis-1`; Prometheus :9090, Grafana :3000,
 > Alertmanager :9093; dashboard on :5173 pinned to
-> `VITE_API_URL=http://localhost:8080`; `ESCALATION_DELAY_MS=60000`;
+> `VITE_API_URL=http://localhost:8080` (or the tunnel URL when the phone is on
+> another network); `ESCALATION_DELAY_MS=60000`;
 > `INTERNAL_API_URL=http://localhost:3001` (the worker's result relay — without
-> it the escalation pill cannot report the truth).
+> it the escalation pill cannot report the truth); `SMS_PROVIDER=twilio`
+> unconfigured, so the escalation leg fails honestly.
 >
 > **Why the proxy matters:** the dashboard and the app talk to :8080. nginx
 > round-robins REST requests and pins each WebSocket to one instance at connect
 > time, so no sticky session is needed. If an API instance dies, the proxy
-> ejects it and the dashboard reconnects elsewhere (drills F3/F4).
+> ejects it and the dashboard reconnects elsewhere (drills F3/F4). The optional
+> Cloudflare tunnel publishes the same :8080 as one public HTTPS/WSS URL for a
+> phone on cellular (`docs/TUNNEL_SETUP.md`) — never point the tunnel at a
+> single API port or F3/F4 stop holding.
 
 ---
 
@@ -50,6 +55,17 @@ nginx -p $prefix -c "$PWD\nginx.conf" -g "daemon off;"
 
 npm run demo:reset                        # 0 active, 3 resolved, queue flushed, counters zeroed
 cd ../warden-dashboard && npm run dev     # :5173
+```
+
+**Phone on another network only** — start the tunnel before Vite (the URL is
+read at server start), then set `VITE_API_URL` to it and restart Vite:
+
+```bash
+# from the repository root
+./.tools/cloudflared.exe tunnel --no-autoupdate --url http://localhost:8080
+# prints https://<random>.trycloudflare.com — paste into warden-dashboard/.env
+cd student_app
+flutter run --dart-define=API_BASE_URL=https://<random>.trycloudflare.com
 ```
 
 `demo:reset` refuses to run when `NODE_ENV=production` (drill **K3**). Run it
@@ -124,8 +140,9 @@ Show the empty board: **"No active alerts"**, **Live** indicator green.
 4. Point at the **Active / Responding / Resolved today** counters — each is a
    clickable shortcut into the tab that owns the number.
 
-**Expected:** card with student name, room, type, and an amber `⏱ Ns` countdown.
-(**B2**)
+**Expected:** a PENDING card with student name, room, type, the GPS / No GPS
+chip, and **no escalation pill yet** — the dashboard has no client-side timer,
+so it says nothing about the SMS until the worker reports. (**B2**)
 
 ---
 
@@ -146,8 +163,10 @@ Show the empty board: **"No active alerts"**, **Live** indicator green.
 ## 2:15 — Escalation fires, then the case is closed (90s) — the centrepiece
 
 1. Raise a **second** SOS from `diya@hostel.local`.
-2. **Do not acknowledge.** Let the countdown run out. The scheduler is accurate
-   to ~70 ms: measured fire at **60.135 s / 60.133 s** in the two V2 runs. (**E2**, **K6/K7**)
+2. **Do not acknowledge.** Leave it for the full 60 seconds — there is no
+   on-screen countdown to narrate; use a watch or the wall clock. The scheduler
+   is accurate to ~70 ms: measured fire at **60.135 s / 60.133 s** in the two V2
+   runs. (**E2**, **K6/K7**)
    > **Use the wait â€” approve a leave and issue a gate pass (60s, on the phone).**
    > While the countdown runs, open **Leave Requests & Outings**. Aarav's
    > day-outing is waiting under *Pending*; approve it. The API mints an
@@ -160,34 +179,37 @@ Show the empty board: **"No active alerts"**, **Live** indicator green.
    > the leave and the away counter drops to 0.
    > Verified end to end 2026-11-18: 34/34 rehearsal checks, including the
    > off-campus SOS and its escalation job.
-3. Watch the pill and narrate what it actually proves:
-   - `⏱ Ns` while the window runs,
-   - `Escalation pending…` once it elapses and the worker has not reported yet,
-   - then the worker's own verdict, relayed over
-     `POST /internal/escalation-result` → `alert:escalated` /
-     `alert:escalation-failed`.
-4. **In this environment the pill lands on red "⚠️ Escalation failed".** That is
-   the correct, honest outcome: Twilio is unconfigured, so the worker's send
-   throws `SMS is not configured` and the worker reports the failure. Say:
+3. **Nothing new appears on the card while the window runs** — that is the
+   point. The dashboard holds no timer and makes no prediction. At ~60 s the
+   worker reports its real outcome over `POST /internal/escalation-result`, and
+   the API fans that out as `alert:escalated` (success) or
+   `alert:escalation_failed` (failure).
+4. **In this environment you get the failure path: no pill at all, plus a
+   toast** — "⚠️ Escalation SMS failed for Diya (Room …) at <time>. Contact the
+   guardian manually." That is the correct, honest outcome: Twilio is
+   unconfigured, so the worker's send throws `SMS is not configured`. Say:
 
    > *"Nobody answered, so the system tried to page the on-call warden. The
    > attempt failed because the SMS credentials aren't provisioned in this
-   > environment — and notice the dashboard tells you that. It does not claim
-   > 'SMS sent'. The old version did, on a 60-second timer, whether or not the
-   > worker succeeded. The pill is now driven by the worker's receipt."*
+   > environment — and notice the dashboard tells you that. There is no green
+   > pill, because there was no send. The old version showed 'SMS sent' on a
+   > 60-second timer, whether or not the worker succeeded. Now the pill can only
+   > appear after the provider confirms a receipt."*
 
    `escalations_fired_total` stays **0** because it counts *delivered*
    escalations; the failure is recorded on the BullMQ job and drives
    `EscalationFailuresHigh`. (**H3**)
 
    > **PRODUCTION DEPLOYMENT ONLY — the SMS delivery leg.** With Twilio
-   > configured (`docs/DEMO_SETUP.md` §1) this same step ends in a red **"SMS
-   > sent"** pill, `escalations_fired_total` increments, and the on-call phone
-   > rings. Do not claim that here. Drills **E2** (delivery leg) and **E9** are
-   > SKIP until the credentials exist.
+   > configured (`docs/DEMO_SETUP.md` §1) this same step ends with a red **"SMS
+   > sent HH:MM:SS"** pill (from the server's `escalatedAt`), a toast-free
+   > board, `escalations_fired_total` incrementing, and the on-call phone
+   > ringing. Do not claim that here. Drills **E2** (delivery leg) and **E9**
+   > are SKIP until the credentials exist; §1.2b's mock provider can rehearse
+   > the pill without an account.
 5. **Acknowledge** the alert, then click **Resolve**. A note dialog opens.
    Type a resolution note — **Submit resolution** stays disabled until the
-   trimmed note is **10 characters** (max 500), and the counter tells you how
+   trimmed note is **3 characters** (max 500), and the counter tells you how
    many more are required. Submit. (**new finding #1**, `tests/demo.test.ts`)
 6. The card shows **RESOLVED**, the note and `Resolved at` appear in the detail
    pane, a success toast confirms, and the student client receives
@@ -224,13 +246,13 @@ Show the empty board: **"No active alerts"**, **Live** indicator green.
    > Index Scan, and at 5,000 rows the planner picks it unforced."*
 
    The measured `EXPLAIN (ANALYZE)` output for all three cases is quoted in
-   `backend/src/routes/alert.routes.ts:475-533`. Reproduce **off stage** with
+   `backend/src/routes/alert.routes.ts:481-560`. Reproduce **off stage** with
    `npx tsx scripts/perf-seed.ts` (it deletes what it seeds) or
    `RUN_INDEX_TEST=true npm test -- tests/index.test.ts`. (**J4** — the old
    script's "it is an index scan, not a table scan" was **false** and is removed.)
 4. Back on the board, click the **Resolved** tab, then raise a **third** SOS.
    That tab cannot show a PENDING row, so a red banner appears:
-   **"🔔 1 new pending alert"** with a **View** button (jumps to Active and
+   **"🔔 1 new pending"** with a **View** button (jumps to Active and
    clears the count) and a **✕** dismiss. The alarm still beeps. Say:
 
    > *"A warden parked on the Resolved tab used to be able to miss a live
@@ -359,13 +381,14 @@ for the emergency button.
 ### Worker down — visible, not silent (**E5**, **H3**)
 
 ```bash
-npx pm2 stop worker      # InstanceDown fires; the pill goes "Escalation pending…"
-                         # then "⚠️ Escalation failed" after a 10 s grace
+npx pm2 stop worker      # queue holds the job; the card shows no pill (nothing to report yet)
 npx pm2 start worker     # an already-queued delayed job survives and fires
+                         # here that means the failure path: toast, still no pill
 ```
 
 **E5** measured a pending job surviving the restart and firing **1.6 s** after
-the worker came back — the job lives in Redis, not in worker memory.
+the worker came back — the job lives in Redis, not in worker memory. With Twilio
+configured, the same restart ends with the "SMS sent" pill instead.
 
 ---
 
@@ -389,8 +412,8 @@ the filter persists in `localStorage` and the next presenter inherits it.
 | Why not cluster the worker? | Two consumers can double-send SMS; needs a lock. Deliberate. |
 | What if Redis dies? | SOS still returns **201 in 45–73 ms on the API side** (150–211 ms browser round trip) and the alert is persisted; `/health` says `degraded`, `/health/ready` says 503 — neither blocks the SOS. Escalation and cross-instance fan-out pause and resume on recovery; the live card is not guaranteed until then. |
 | What if FCM fails? | Push is fire-and-forget; the socket path is primary; stale tokens are deleted on the next send. **Unit-proven only** — Firebase is unconfigured here, so no real device has exercised it (`docs/DEMO_SETUP.md` §2). |
-| Why does the pill say "Escalation failed"? | Because the worker's Twilio send genuinely failed — no credentials in this environment. The pill reports the worker's receipt, not a client-side timer. That is the fix, not a bug. |
+| Why is there no "SMS sent" pill? | Because the worker's Twilio send genuinely failed — no credentials in this environment. The pill only renders from the server's `escalatedAt`, which is written after the provider confirms; a failed send produces the "Escalation SMS failed" toast instead. That is the fix, not a bug. |
 | Can a student be rate-limited out of sending an SOS? | No. Over 5 SOS/60s the limiter **allows the request through**, logs `sos_rate_limit_overridden` and increments `sos_overrides_total`. We prefer a 7th push over a silently dropped emergency. (**G2**) |
 | Why plain-string status? | Transition rules live in testable app code; adding RESOLVED needed no enum migration. |
-| Why a Seq Scan in the history query? | The planner's choice at demo row counts, not a missing index. Forced `enable_seqscan=off` uses an index; at 5,003 rows the planner picks `idx_alerts_status_created` unforced (3×, one per UNION branch, 0.607 ms). Measured plans are in `alert.routes.ts:475-533`. (**J4**) |
+| Why a Seq Scan in the history query? | The planner's choice at demo row counts, not a missing index. Forced `enable_seqscan=off` uses an index; at 5,003 rows the planner picks `idx_alerts_status_created` unforced (3×, one per UNION branch, 0.607 ms). Measured plans are in `alert.routes.ts:481-560`. (**J4**) |
 | Is the SMS number committed? | No — `WARDEN_ONCALL_PHONE` env only. The root `.husky/pre-commit` scanner blocks secret-shaped content; git history is initialized and gitleaks reports **0 findings** (`docs/DEMO_SETUP.md` §4). |

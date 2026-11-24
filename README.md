@@ -141,8 +141,8 @@ flutter pub get
 | Target | Command |
 |---|---|
 | Android emulator | `flutter run` (defaults to `http://10.0.2.2:4000`) |
-| Physical phone, via nginx | `flutter build apk --release --dart-define=API_URL=http://<PC-LAN-IP>:8080` |
-| Web / desktop preview | `flutter run -d chrome --dart-define=API_URL=http://localhost:8080` |
+| Physical phone, via nginx | `flutter build apk --release --dart-define=API_BASE_URL=http://<PC-LAN-IP>:8080` |
+| Web / desktop preview | `flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8080` |
 
 The phone and the PC must be on the same network, and the PC firewall must allow
 inbound TCP 8080. The app declares `usesCleartextTraffic="true"` for plain-HTTP

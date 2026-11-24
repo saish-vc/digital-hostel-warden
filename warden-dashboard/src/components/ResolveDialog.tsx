@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-const MIN_NOTE = 10;
+const MIN_NOTE = 3;
 const MAX_NOTE = 500;
 
 interface ResolveDialogProps {
@@ -12,7 +12,7 @@ interface ResolveDialogProps {
 /**
  * Inline resolution note form for an ACKNOWLEDGED alert.
  *
- * The 10-char floor mirrors PATCH /alerts/:id/resolve, which rejects anything
+ * The 3-char floor mirrors PATCH /alerts/:id/resolve, which rejects anything
  * shorter with a 400 — so the button stays disabled rather than letting the
  * warden discover the rule via an error. The note is trimmed before submission
  * so the client and server agree on the length they are validating.

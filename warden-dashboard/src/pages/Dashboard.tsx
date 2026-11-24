@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getStoredUser } from '../api/client';
-import { useAlertSocket, DEBUG_ESCALATION } from '../hooks/useAlertSocket';
+import { useAlertSocket } from '../hooks/useAlertSocket';
 import { playBeepForAlert, unlockAudio } from '../lib/beep';
 import {
   observeForegroundMessages,
@@ -84,7 +84,7 @@ export default function Dashboard({ userName, onNavigate, onLogout }: DashboardP
     resolve,
     refresh,
     lastNewAlertId,
-    escalationUnconfirmed,
+    lastEscalationFailure,
   } = useAlertSocket();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -92,7 +92,10 @@ export default function Dashboard({ userName, onNavigate, onLogout }: DashboardP
   const [soundOn, setSoundOn] = useState(false);
   const [filter, setFilter] = useState<Filter>(readStoredFilter);
   const [flashId, setFlashId] = useState<string | null>(null);
-  const [unseenPending, setUnseenPending] = useState(0);
+  // New PENDING alerts that arrived while the Resolved tab hid them.
+  const [unseenIds, setUnseenIds] = useState<string[]>([]);
+  const [scrollTargetId, setScrollTargetId] = useState<string | null>(null);
+  const [escalationToast, setEscalationToast] = useState<string | null>(null);
   const [actionToast, setActionToast] = useState<
     { kind: 'success' | 'error'; text: string } | null
   >(null);
@@ -105,6 +108,8 @@ export default function Dashboard({ userName, onNavigate, onLogout }: DashboardP
   // Read inside the alert:new effect without re-running it on a tab change.
   const filterRef = useRef(filter);
   filterRef.current = filter;
+  const alertsRef = useRef(alerts);
+  alertsRef.current = alerts;
 
   // --- Push state ---------------------------------------------------------
   const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
@@ -189,30 +194,59 @@ export default function Dashboard({ userName, onNavigate, onLogout }: DashboardP
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  // A new SOS must never be silently swallowed by the current tab. On Active
-  // we scroll + flash it; on Resolved/All we keep the operator's view intact
-  // and raise a banner instead (the Resolved tab cannot show a PENDING row).
+  // A new SOS must never be silently swallowed by the current tab. Where the
+  // tab can show it we scroll + flash; the Resolved tab cannot show a PENDING
+  // row, so it keeps the operator's view and raises a banner instead.
   useEffect(() => {
     if (!lastNewAlertId) {
       return;
     }
 
-    if (filterRef.current !== 'active') {
-      setUnseenPending((count) => count + 1);
+    if (filterRef.current === 'resolved') {
+      setUnseenIds((ids) => (ids.includes(lastNewAlertId) ? ids : [lastNewAlertId, ...ids]));
       return;
     }
 
-    setFlashId(lastNewAlertId);
+    setScrollTargetId(lastNewAlertId);
+  }, [lastNewAlertId]);
+
+  // Runs after the target card has rendered (the tab switch from the banner's
+  // View lands here one render later than the click).
+  useEffect(() => {
+    if (!scrollTargetId) {
+      return;
+    }
+    const node = cardRefs.current.get(scrollTargetId);
+    if (!node) {
+      return;
+    }
 
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    cardRefs.current.get(lastNewAlertId)?.scrollIntoView({
-      behavior: reducedMotion ? 'auto' : 'smooth',
-      block: 'nearest',
-    });
+    node.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
+    setFlashId(scrollTargetId);
+    setScrollTargetId(null);
+  }, [scrollTargetId, filter, alerts]);
 
+  useEffect(() => {
+    if (!flashId) {
+      return;
+    }
     const timer = window.setTimeout(() => setFlashId(null), 3_000);
     return () => window.clearTimeout(timer);
-  }, [lastNewAlertId]);
+  }, [flashId]);
+
+  // A failed escalation SMS is a safety event: no pill, and a toast that
+  // stays until the warden dismisses it.
+  useEffect(() => {
+    if (!lastEscalationFailure) {
+      return;
+    }
+    const alert = alertsRef.current.find((item) => item.id === lastEscalationFailure.alertId);
+    const who = alert ? `${alert.student.name} (Room ${alert.student.roomNumber})` : 'an alert';
+    setEscalationToast(
+      `Escalation SMS failed for ${who} at ${new Date(lastEscalationFailure.at).toLocaleTimeString()}. Contact the guardian manually.`,
+    );
+  }, [lastEscalationFailure]);
 
   // Auto-dismiss the action toast (resolve success / failure).
   useEffect(() => {
@@ -223,14 +257,25 @@ export default function Dashboard({ userName, onNavigate, onLogout }: DashboardP
     return () => window.clearTimeout(timer);
   }, [actionToast]);
 
-  /** Switching to Active means the operator has seen the pending backlog. */
+  /** Switching to a tab that shows PENDING means the backlog has been seen. */
   function changeFilter(next: Filter) {
     setFilter(next);
     setJustResolvedId(null);
-    if (next === 'active') {
-      setUnseenPending(0);
+    if (next !== 'resolved') {
+      setUnseenIds([]);
     }
   }
+
+  function viewUnseen(id: string) {
+    changeFilter('active');
+    setSelectedId(id);
+    setScrollTargetId(id);
+  }
+
+  // Another warden may acknowledge an unseen alert before this one looks.
+  const unseenPending = unseenIds.filter((id) =>
+    alerts.some((alert) => alert.id === id && alert.status === 'PENDING'),
+  );
 
   const activeCount = alerts.filter((alert) => alert.status === 'PENDING').length;
   const respondingCount = alerts.filter(
@@ -353,16 +398,6 @@ export default function Dashboard({ userName, onNavigate, onLogout }: DashboardP
       >
         <ConnectionIndicator state={connectionState} />
 
-        {DEBUG_ESCALATION && escalationUnconfirmed > 0 && (
-          <span
-            className="flex items-center gap-2 text-xs text-amber-300"
-            title="Debug: pending alerts past the escalation window with no worker confirmation"
-          >
-            <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
-            escalation_unconfirmed: {escalationUnconfirmed}
-          </span>
-        )}
-
         {indicator && (
           <span
             className="flex items-center gap-2 text-xs text-slate-300"
@@ -447,28 +482,50 @@ export default function Dashboard({ userName, onNavigate, onLogout }: DashboardP
         )}
 
         {/* A new SOS arrived under a tab that cannot show it. Keep the tab. */}
-        {unseenPending > 0 && (
-          <div className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-red-700 bg-red-950/60 px-4 py-3 text-sm text-red-100">
+        {unseenPending.length > 0 && (
+          <div
+            role="alert"
+            data-testid="new-pending-banner"
+            className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-red-700 bg-red-950/60 px-4 py-3 text-sm text-red-100"
+          >
             <p className="font-medium">
-              🔔 {unseenPending} new pending alert{unseenPending === 1 ? '' : 's'}
+              🔔 {unseenPending.length} new pending
             </p>
             <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                onClick={() => changeFilter('active')}
+                onClick={() => viewUnseen(unseenPending[0])}
                 className="rounded-lg bg-red-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-600"
               >
                 View
               </button>
               <button
                 type="button"
-                onClick={() => setUnseenPending(0)}
+                onClick={() => setUnseenIds([])}
                 aria-label="Dismiss new-alert banner"
                 className="rounded px-2 text-red-300 hover:text-red-100"
               >
                 ✕
               </button>
             </div>
+          </div>
+        )}
+
+        {escalationToast && (
+          <div
+            role="alert"
+            data-testid="escalation-failed-toast"
+            className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-700 bg-red-950/70 px-4 py-3 text-sm font-medium text-red-100"
+          >
+            <p>⚠️ {escalationToast}</p>
+            <button
+              type="button"
+              onClick={() => setEscalationToast(null)}
+              aria-label="Dismiss escalation failure"
+              className="shrink-0 rounded px-2 text-red-300 hover:text-red-100"
+            >
+              ✕
+            </button>
           </div>
         )}
 

@@ -1,18 +1,19 @@
 # Demo setup — the configuration that is not code
 
-**Why this file exists.** Four dry-run drills cannot pass by changing code.
-C4/C5 need an Android emulator, I2/I3 need a git repository, and the SMS and
-FCM legs need *your* accounts, *your* phone number and *your* Firebase project.
-No amount of editing the repository substitutes for those. This is the manual
-checklist that closes them.
+**Why this file exists.** Some dry-run drills cannot pass by changing code.
+C4/C5 need an Android emulator; the SMS and FCM legs need *your* accounts,
+*your* phone number and *your* Firebase project. I2/I3 (git + secret scan) are
+already satisfied on this tree and are documented in §4 so they can be
+re-verified after any change; I5 is N/A in this topology (§6). No amount of
+editing the repository substitutes for the rest.
 
-**This file is a checklist, not automation.** Nothing here has been run for
-you. Work through it top to bottom, tick the boxes, and record the outcome.
-Every command below was checked against this tree on Windows 10 / Git Bash;
-where a step differs on macOS/Linux the alternative is given.
+**This file is a checklist, not automation.** §1–§3 have not been run for you.
+Work through it top to bottom, tick the boxes, and record the outcome. Every
+command below was checked against this tree on Windows 10 / Git Bash; where a
+step differs on macOS/Linux the alternative is given.
 
 Run `cd backend && npm run test:db:up && npm test` first and confirm it is
-green (74 passed, 1 skipped, ~76s). This checklist assumes that baseline.
+green (80 passed, 1 skipped). This checklist assumes that baseline.
 
 ---
 
@@ -22,29 +23,34 @@ Verified by inspection, not assumed:
 
 | Item | State | Consequence |
 |---|---|---|
-| Twilio | `TWILIO_ACCOUNT_SID` / `AUTH_TOKEN` / `FROM_NUMBER` / `WARDEN_ONCALL_PHONE` all empty | Escalation job fails with `SMS is not configured`; `sms_sent_total` has **no series** |
+| Twilio | `TWILIO_ACCOUNT_SID` / `AUTH_TOKEN` / `FROM_NUMBER` / `WARDEN_ONCALL_PHONE` all empty; `SMS_PROVIDER=twilio` | Escalation job fails with `SMS is not configured`; `sms_sent_total` has **no series** (see §1.2b for the mock alternative) |
 | FCM (backend) | `FIREBASE_SERVICE_ACCOUNT_B64` empty | Push disabled; `fcm_sent_total` has **no series** |
 | FCM (dashboard) | `.env` holds `TEST-KEY` / `test-project` placeholders | Service worker initialises against a non-existent project |
 | Firebase SDK version | `firebase@13.2.0` in `package.json`; `importScripts` pinned to `13.2.0` | **Already matches** — re-check only after an upgrade |
 | Android tooling | `flutter` on PATH; `adb` **not** on PATH; no AVD | C4/C5 SKIP |
-| Git | Initialized; baseline commit `1083575`; `core.hooksPath=.husky` | I2/I3 now runnable; every commit is scanned |
-| Secret scanner | `.husky/pre-commit` (repo root) + `gitleaks 8.30.1` + `.gitleaks.toml` | Staged and full-history scans: **0 findings** |
+| Git | Initialized; HEAD `f3fb785` at the time of writing; `core.hooksPath=.husky` | I2/I3 runnable; every commit is scanned |
+| Secret scanner | `.husky/pre-commit` (repo root) + `gitleaks 8.30.1` + `.gitleaks.toml` | Staged and full-history scans: **0 findings** (230 tracked files, 11 commits) |
+| HTTPS redirect (I5) | `ENABLE_HTTPS_REDIRECT` unset/false; when enabled the middleware returns 308 and exempts `/health` and `/metrics` | **N/A** — TLS terminates outside the app (see §6) |
 | Grafana | Both variants provisioned | Load **variant A** until §1 and §2 are done |
 
 **Port map — the single most common setup mistake.** `backend/src/config/instance.ts`
 resolves the port in this order: explicit `PORT` → `NODE_APP_INSTANCE`
-(PM2 cluster: `3001 + index`) → **4000**.
+(PM2 cluster: `3001 + index`) → `API_PORT` → **3001**.
 
 | How you run the API | Port(s) | What clients must use |
 |---|---|---|
-| `npm run dev` (single instance) | `4000` | `http://localhost:4000` |
+| `npm run dev` (single instance) | `3001` | `http://localhost:3001` |
 | `pm2 start ecosystem.config.js` (API topology) | `3001`, `3002`, `3003` | direct only: `http://localhost:3001` |
 | PM2 + nginx (the demo topology) | nginx `8080` → `3001/3002/3003` | `http://localhost:8080` |
+| nginx + Cloudflare tunnel | public `https://…trycloudflare.com` → nginx `8080` | the tunnel URL (Flutter `--dart-define`, dashboard `VITE_API_URL`) |
+| nginx + Tailscale Funnel (**stable URL**) | public `https://<machine>.<tailnet>.ts.net` → nginx `8080` | the `ts.net` URL in both clients; survives restarts |
 
-The Flutter app defaults to `http://10.0.2.2:4000`
-(`student_app/lib/services/api.dart:11`). That is correct for `npm run dev`
-and **wrong for the PM2/nginx demo topology** — clients must use the proxy on
-`8080`. See §3.3.
+The Flutter app defaults to `http://10.0.2.2:3001` (`student_app/lib/config.dart`),
+overridable with `--dart-define=API_BASE_URL=…` and used for both REST and the
+socket (`http→ws`, `https→wss`). That default is right for `npm run dev` and
+**wrong for the PM2/nginx demo topology** — clients must use the proxy on
+`8080` or the tunnel. The dashboard **fails fast** if `VITE_API_URL` is unset
+rather than guessing a port; see §3.3.
 
 ### 0.1 Start the reverse proxy (F3/F4)
 
@@ -68,14 +74,19 @@ nginx -p $prefix -c "$PWD\backend\nginx.conf" -g "daemon off;"
 ```
 
 - [ ] Point the dashboard at the proxy: `warden-dashboard/.env` →
-      `VITE_API_URL="http://localhost:8080"`, then restart Vite.
+      `VITE_API_URL="http://localhost:8080"`, then restart Vite (the value is
+      read at server start; saving alone is not enough). For a phone on another
+      network, use Tailscale Funnel (stable `ts.net` URL, `docs/TUNNEL_SETUP.md`
+      §1b) or a Cloudflare tunnel through nginx (§2b).
 - [ ] F3/F4 acceptance: stop one API instance (`pm2 stop <id>`), confirm the
       dashboard returns to `Live` and `POST /alerts` through `8080` still
       returns `201`. Restart it with `pm2 start <id>`.
 
 > The proxy is **not** a production TLS terminator here; this is a plain HTTP
-> listener on `localhost:8080`. TLS and a public hostname remain production
-> work (see `docs/FUTURE_WORK.md`).
+> listener on `localhost:8080`. `backend/.env` therefore keeps
+> `ENABLE_HTTPS_REDIRECT=false` — with TLS terminating at nginx or Cloudflare,
+> the hop nginx→API is plain HTTP and an enabled redirect would 308 every
+> request. See §6.
 
 ---
 
@@ -105,7 +116,7 @@ WARDEN_ONCALL_PHONE="+91..."        # the real on-call phone, E.164
 ```
 
 `WARDEN_ONCALL_PHONE` is validated against `^\+?[1-9]\d{1,14}$`
-(`sms.service.ts:135`). Spaces, dashes or a leading `0` fail with
+(`sms.service.ts:159`). Spaces, dashes or a leading `0` fail with
 `WARDEN_ONCALL_PHONE is not a valid E.164 number`. Use `+919876543210`, not
 `+91 98765 43210`.
 
@@ -114,6 +125,33 @@ WARDEN_ONCALL_PHONE="+91..."        # the real on-call phone, E.164
       empty for a LAN demo and the body stays short.
 - [ ] Confirm `backend/.env` is gitignored before saving (§4). **Never** paste
       the Auth Token into a committed file, a screenshot, or a chat message.
+
+### 1.2b No account? Use the mock provider (dev/demo only)
+
+The escalation leg can be exercised end to end without Twilio. The mock
+returns a `MOCK-<alertId>` receipt, increments `sms_sent_total`, and the
+server-driven pill behaves exactly as with a real send.
+
+- [ ] In `backend/.env` (dev only — it is **refused** under
+      `NODE_ENV=production`):
+
+```dotenv
+SMS_PROVIDER=mock
+SMS_MOCK_OUTCOME=""      # set to "fail" to exercise the failure toast
+```
+
+- [ ] PM2 hardcodes `NODE_ENV=production` for its worker, so run the worker
+      from a terminal instead: `npx pm2 stop worker`, then
+      `cd backend && npm run worker` (keep it open).
+- [ ] Raise an SOS and leave it unacknowledged. *Expected:* `[sms] MOCK
+      escalation SMS for alert <id> (nothing sent)`, `escalatedAt` written,
+      pill appears.
+- [ ] Set `SMS_MOCK_OUTCOME=fail`, restart the terminal worker, repeat.
+      *Expected:* the job fails, `escalatedAt` stays `null`,
+      `alert:escalation_failed` fires, the dashboard shows the "Escalation SMS
+      failed" toast and **no** pill.
+- [ ] Revert to `SMS_PROVIDER=twilio`, stop the terminal worker, and
+      `npx pm2 start worker` before a real demo.
 
 ### 1.3 Restart so the new env is loaded
 
@@ -167,10 +205,11 @@ phone receives a body containing `[HOSTEL EMERGENCY]`, `Aarav Sharma`,
 - [ ] Measure delivery latency across 3–5 real sends. If it is consistently
       **>30s**, decide whether to switch to MSG91.
 
-**This is a decision, not a configuration flip.** `SMS_PROVIDER` is a switch
-with exactly one implemented value. Setting `SMS_PROVIDER=msg91` today throws
-`SMS_PROVIDER=msg91 is not implemented yet (only "twilio")`
-(`sms.service.ts:121-126`) and every escalation job fails. The MSG91 branch is
+**This is a decision, not a configuration flip.** `SMS_PROVIDER` accepts
+exactly two implemented values, `twilio` (default) and `mock` (dev only).
+Setting `SMS_PROVIDER=msg91` today throws
+`SMS_PROVIDER=msg91 is not implemented yet (only "twilio" or "mock")`
+(`sms.service.ts:141-148`) and every escalation job fails. The MSG91 branch is
 a stub comment, not code. Implementing it means adding `sendViaMsg91(alert, phone)`
 with the same `Promise<SmsResult>` contract and extending
 `isRetryableTwilioError` for MSG91's error shape. That is a code change outside
@@ -183,9 +222,15 @@ this remediation's scope — raise it separately, and see
       ("Hostel Emergency (SMS + FCM configured)"). Panels 5 and 6 turn into
       live stats. Both queries use `or vector(0)`, so they read `0` rather than
       "No data" even before the first send.
-- [ ] The dashboard's escalation pill now reports a **server-confirmed**
-      outcome. With Twilio unconfigured it correctly degrades to
-      unconfirmed/failed instead of claiming "SMS sent".
+- [ ] The dashboard's pill is **server-driven**: it renders `SMS sent <time>`
+      only when `GET /alerts` (or the `alert:escalated` socket event) carries a
+      non-null `escalatedAt`, which the worker writes only after the provider
+      confirms the send. There is no client-side countdown and no optimistic
+      "sent" claim. On failure there is no pill at all; instead the dashboard
+      shows a one-off "⚠️ Escalation SMS failed" toast so the warden knows to
+      contact the guardian by phone.
+- [ ] With Twilio unconfigured (and no `SMS_PROVIDER=mock`), the job fails and
+      you get the toast — never a false "SMS sent".
 
 ---
 
@@ -266,7 +311,9 @@ register.
 
 - [ ] Use `http://localhost:5173` (a secure context) or real **HTTPS**.
       Web Push will not work over a plain `http://192.168.x.x` LAN address.
-      For a second device, terminate TLS or use an HTTPS tunnel.
+      For a second device, terminate TLS or use an HTTPS tunnel — the
+      Cloudflare tunnel in `docs/TUNNEL_SETUP.md` publishes the API, not the
+      dashboard, so serve the built dashboard over HTTPS separately.
 - [ ] Log in to the dashboard and **accept** the notification permission prompt.
 - [ ] DevTools → **Application → Service Workers** → confirm
       `firebase-messaging-sw.js` is **activated** and running.
@@ -324,14 +371,28 @@ emulator existed. `flutter` is already on PATH; `adb` is not.
 
 ### 3.3 Point the app at the right port — read this before running
 
-The app defaults to `http://10.0.2.2:4000`. `10.0.2.2` is the emulator's alias
-for the host, which is correct; **the port is only correct for `npm run dev`.**
+The app reads a single constant, `AppConfig.apiBase`
+(`student_app/lib/config.dart`), defaulting to `http://10.0.2.2:3001`.
+`10.0.2.2` is the emulator's alias for the host, which is correct; **the port
+is only correct for `npm run dev`.**
 
-- [ ] If the API runs under **PM2** (the demo topology), override the port:
+- [ ] If the API runs under **PM2** (the demo topology), point the app at the
+      proxy:
 
 ```bash
 cd student_app
-flutter run --dart-define=API_URL=http://10.0.2.2:8080
+flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080
+```
+
+- [ ] If the phone and the host are on **different networks**, use the public
+      URL (same value in `warden-dashboard/.env` as `VITE_API_URL`):
+
+```bash
+# stable: Tailscale Funnel (docs/TUNNEL_SETUP.md §1b)
+flutter run --dart-define=API_BASE_URL=https://<machine>.<tailnet>.ts.net
+
+# or a quick Cloudflare tunnel (hostname changes every run)
+flutter run --dart-define=API_BASE_URL=https://<name>.trycloudflare.com
 ```
 
 - [ ] If the API runs via **`npm run dev`**, the default is already right:
@@ -341,10 +402,10 @@ flutter run
 ```
 
 - [ ] For a **physical device** on the same Wi-Fi, use the host's LAN IP and
-      whichever port the API is on:
+      the proxy port:
 
 ```bash
-flutter run --dart-define=API_URL=http://192.168.1.20:8080
+flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8080
 ```
 
 *Expected:* the login screen accepts `aarav@hostel.local / password123`. If it
@@ -396,15 +457,17 @@ git config core.hooksPath .husky     # or: npm run hooks:install
 git config --get core.hooksPath      # -> .husky
 ```
 
-- [x] Baseline commit: `1083575` (`baseline: verified phases 1-4 …`).
+- [x] Baseline commit at the time of writing: `f3fb785`. The baseline hash is
+      informational — re-run the scans after any change instead of trusting it.
 - [x] Independent scanner installed: `winget install Gitleaks.Gitleaks`
       → `gitleaks 8.30.1`, with the narrow allowlist in `.gitleaks.toml`.
-- [x] `gitleaks git --staged --config .gitleaks.toml` → **no leaks found**
-      (209 tracked files).
-- [x] `gitleaks git --config .gitleaks.toml` (full history) → **no leaks found**.
+- [x] `gitleaks git --staged --config .gitleaks.toml` → **no leaks found**.
+- [x] `gitleaks git --config .gitleaks.toml` (full history) → **no leaks
+      found** (11 commits, ~1.5 MB).
 - [x] `node backend/scripts/secret-scan-check.cjs` → **CLEAN — 0 hits**.
-- [x] `git ls-files` contains only `.env.example` / `.env.test.example`;
-      no real `.env`, `*.pem`, or Firebase service-account JSON is tracked.
+- [x] `git ls-files` (230 tracked files) contains only `.env.example` /
+      `.env.test.example`; no real `.env`, `*.pem`, or Firebase
+      service-account JSON is tracked.
 
 - [ ] **Do not `npm install husky` or `git-secrets`.** Neither is a dependency
       of this project, and neither is needed: the repository ships its own
@@ -444,7 +507,9 @@ git commit -m "probe: should be blocked"
 *Expected:* the commit is **rejected** with
 `🔒 PRE-COMMIT BLOCKED: secret-shaped content staged!` and a non-zero exit.
 
-- [ ] Clean up: `git rm --cached secret-probe.txt && rm secret-probe.txt`.
+- [x] Executed on this tree: exit `1`, `HEAD` still the previous commit, probe
+      removed. That is the I3 evidence.
+- [ ] Clean up (if the probe is still present): `git rm --cached secret-probe.txt && rm secret-probe.txt`.
 - [ ] The scanner is shape-based and covers Twilio SID/auth-token and
       `JWT_SECRET`/`METRICS_TOKEN` assignments, long base64 blobs (Firebase
       service-account bodies), FCM server keys, Google API keys, AWS access
@@ -464,8 +529,14 @@ git log --all -p | grep -nE 'TWILIO_AUTH_TOKEN *= *[^"[:space:]]|eyJ[A-Za-z0-9_-
 ```
 
 *Expected:* no hits, or hits only on allowlisted placeholders (`""`,
-`CHANGE-ME`, the test fixtures). Record the command and its empty output as
-the I2 evidence.
+`CHANGE-ME`, the test fixtures). On this tree the grep returns 6 lines and all
+are documentation or test fixtures: the DRY_RUN_REPORT row that lists the
+`TWILIO_AUTH_TOKEN` placeholder, two copies of the blocked-probe command itself, the
+string `-----BEGIN PRIVATE KEY-----\n...` as a placeholder, the same token name
+with an ellipsis value as a placeholder, and `process.env.TWILIO_AUTH_TOKEN = 'test-auth-token'` in
+the test suite. The authoritative I2 evidence is
+`gitleaks git --config .gitleaks.toml` → **no leaks found** over all commits;
+record that output alongside the grep.
 
 - [ ] If you later import an existing history, scan it before pushing and
       rotate anything found.
@@ -474,7 +545,7 @@ the I2 evidence.
 
 ## 5. After configuration — what to re-run
 
-- [ ] `cd backend && npm run test:db:up && npm test` → still 74 passed, 1 skipped.
+- [ ] `cd backend && npm run test:db:up && npm test` → still 80 passed, 1 skipped.
 - [ ] `npm run demo:reset` → 0 active, 3 resolved; PM2 restarts `api`+`worker`
       and the Prometheus counters zero. Grafana panels read 0, not stale totals.
 - [ ] Load Grafana **variant B** (`hostel-emergency-configured`) now that both
@@ -497,7 +568,29 @@ the I2 evidence.
 
 ---
 
-## 6. Sign-off
+## 6. I5 — HTTPS redirect is N/A in this topology
+
+Drill I5 ("plain HTTP is redirected to HTTPS") does not apply here, and it is
+recorded as **N/A**, not PASS.
+
+`backend/src/middleware/httpsRedirect.ts` resolves the switch as: env
+`true` → on, env `false` → off, unset → on iff `NODE_ENV=production`. When on,
+it returns **308** (method and body preserved) for any non-exempt request whose
+first `X-Forwarded-Proto` is not `https`, and it **exempts `/health`,
+`/health/ready` and `/metrics`** so LB probes and Prometheus scrapes are never
+redirected.
+
+- [x] `backend/.env` and `.env.example` both set `ENABLE_HTTPS_REDIRECT=false`.
+      PM2 runs `NODE_ENV=production`, so unsetting it would enable the
+      redirect, and nginx→API is plain HTTP (`$scheme` = `http`) — every tunnel
+      request would 308 to a localhost HTTPS port that does not exist.
+- [x] TLS terminates at Cloudflare (tunnel) or would terminate at nginx in a
+      production deploy; the app-level redirect is therefore redundant here.
+- [ ] If you later expose the API directly without a TLS terminator, set
+      `ENABLE_HTTPS_REDIRECT=true` and re-run the drill: expect `308` on
+      `POST /alerts` over HTTP and `200` on `/health`.
+
+## 7. Sign-off
 
 | Section | Done by | Date | Evidence recorded (SID / project id / AVD / commit) | Result |
 |---|---|---|---|---|
@@ -506,6 +599,7 @@ the I2 evidence.
 | 3. Android emulator | | | AVD name + 4 screenshots | ☐ pass ☐ fail |
 | 4. Git + secret scan | | | commit sha + blocked-probe output | ☐ pass ☐ fail |
 | 5. Re-runs | | | suite summary + V2 report updated | ☐ pass ☐ fail |
+| 6. I5 (HTTPS redirect) | N/A | 2026-11-20 | `ENABLE_HTTPS_REDIRECT=false`; TLS terminates at Cloudflare/nginx | ☑ N/A |
 
 A section passes only when every checkbox in it is ticked **and** its expected
 outcome was observed. Partial passes must name the step that failed.

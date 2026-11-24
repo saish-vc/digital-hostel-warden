@@ -12,7 +12,7 @@ The API URL is configured at compile/run time using Dart environment defines (`-
 flutter run
 
 # Physical Device over Local Wi-Fi
-flutter run --dart-define=API_URL=http://192.168.1.100:3001
+flutter run --dart-define=API_BASE_URL=http://192.168.1.100:3001
 ```
 
 ### Production Builds
@@ -21,16 +21,16 @@ For production releases, pass your live production domain (HTTPS/WSS):
 
 ```bash
 # Android APK release
-flutter build apk --release --dart-define=API_URL=https://api.hostelguard.com
+flutter build apk --release --dart-define=API_BASE_URL=https://api.hostelguard.com
 
 # Android App Bundle (for Google Play Console)
-flutter build appbundle --release --dart-define=API_URL=https://api.hostelguard.com
+flutter build appbundle --release --dart-define=API_BASE_URL=https://api.hostelguard.com
 
 # iOS Release (via Xcode or CLI on macOS)
-flutter build ipa --release --dart-define=API_URL=https://api.hostelguard.com
+flutter build ipa --release --dart-define=API_BASE_URL=https://api.hostelguard.com
 
 # Web Release
-flutter build web --release --dart-define=API_URL=https://api.hostelguard.com
+flutter build web --release --dart-define=API_BASE_URL=https://api.hostelguard.com
 ```
 
 ## Transport Security

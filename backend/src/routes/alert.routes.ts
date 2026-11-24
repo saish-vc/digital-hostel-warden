@@ -361,21 +361,21 @@ router.patch('/:id/acknowledge', authenticate, requireRole('WARDEN'), async (req
  * not one to silently absorb.
  *
  * The student's confirmation screen turns "Case closed" via the SAME
- * alert:updated event shape acknowledge emits — no new socket event, no new
- * client code path.
+ * alert:updated event shape acknowledge emits; wardens receive alert:resolved.
  */
 router.patch('/:id/resolve', authenticate, requireRole('WARDEN'), async (req, res) => {
   const id = String(req.params.id);
 
-  const { resolutionNote } = req.body ?? {};
-  if (typeof resolutionNote !== 'string') {
-    res.status(400).json({ error: 'resolutionNote must be a string (10-500 chars)' });
+  const rawNote = (req.body ?? {}).resolutionNote;
+  if (typeof rawNote !== 'string') {
+    res.status(400).json({ error: 'resolutionNote must be a string (3-500 chars)' });
     return;
   }
-  if (resolutionNote.length < 10 || resolutionNote.length > 500) {
+  const resolutionNote = rawNote.trim();
+  if (resolutionNote.length < 3 || resolutionNote.length > 500) {
     res
       .status(400)
-      .json({ error: 'resolutionNote must be 10-500 characters' });
+      .json({ error: 'resolutionNote must be 3-500 characters' });
     return;
   }
 
@@ -403,6 +403,26 @@ router.patch('/:id/resolve', authenticate, requireRole('WARDEN'), async (req, re
       allowed: ['ACKNOWLEDGED'],
     });
     return;
+  }
+
+  // Same cancel-before-write ordering as acknowledge. An ACKNOWLEDGED alert's
+  // job is normally gone already; this covers a cancel that failed then.
+  try {
+    const removed = await withQueueTimeout(cancelEscalation(id), 'escalation_cancel');
+    if (removed) {
+      logger.info(
+        { alertId: id, jobId: escalationJobId(id) },
+        `[escalation] job ${escalationJobId(id)} removed on resolve`,
+      );
+    }
+  } catch (error) {
+    logger.warn(
+      {
+        alertId: id,
+        err: error instanceof Error ? error.message : error,
+      },
+      `[escalation] cancel on resolve skipped for alert ${id}`,
+    );
   }
 
   // Conditional update = the race-safety net: if two wardens resolve at the
@@ -449,8 +469,10 @@ router.patch('/:id/resolve', authenticate, requireRole('WARDEN'), async (req, re
     include: { student: { select: studentSelect } },
   });
 
+  // Wardens get the dedicated alert:resolved; the student app keeps the
+  // alert:updated shape it already renders "Case closed" from.
   const io = getIO();
-  io.to('wardens').emit('alert:updated', alert);
+  io.to('wardens').emit('alert:resolved', alert);
   io.to(`student:${alert.studentId}`).emit('alert:updated', alert);
 
   res.json(alert);

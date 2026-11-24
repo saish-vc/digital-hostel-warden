@@ -65,13 +65,16 @@ describe('GET /health', () => {
     expect(response.body.instanceId).toBe('3002');
   });
 
-  it('falls back to 4000 when neither PORT nor NODE_APP_INSTANCE is set', async () => {
+  it('falls back to 3001 when neither PORT, NODE_APP_INSTANCE nor API_PORT is set', async () => {
+    const originalApiPort = process.env.API_PORT;
     delete process.env.PORT;
     delete process.env.NODE_APP_INSTANCE;
+    delete process.env.API_PORT;
 
     const response = await request(server.app).get('/health');
+    if (originalApiPort !== undefined) process.env.API_PORT = originalApiPort;
 
     expect(response.status).toBe(200);
-    expect(response.body.instanceId).toBe('4000');
+    expect(response.body.instanceId).toBe('3001');
   });
 });

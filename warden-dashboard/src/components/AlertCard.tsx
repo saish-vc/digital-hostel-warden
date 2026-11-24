@@ -1,5 +1,5 @@
 import type { Alert } from '../api/client';
-import EscalationCountdown from './EscalationCountdown';
+import EscalationPill from './EscalationPill';
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], {
@@ -62,12 +62,7 @@ export default function AlertCard({
       </p>
 
       <div className="mt-2 flex items-center gap-2">
-        <EscalationCountdown
-          createdAt={alert.createdAt}
-          status={alert.status}
-          escalatedAt={alert.escalatedAt}
-          escalationFailedAt={alert.escalationFailedAt}
-        />
+        <EscalationPill escalatedAt={alert.escalatedAt} />
       </div>
     </button>
   );

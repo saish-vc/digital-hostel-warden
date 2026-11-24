@@ -64,7 +64,7 @@ HostelGuard is a mission-critical emergency response and student hostel manageme
 - [x] **Full Production Compose Stack:** `docker-compose.prod.yml` orchestrating PostgreSQL 16, Redis 7 (AOF + `noeviction`), API cluster (2 replicas), Escalation Worker, Leave Worker, and Nginx.
 - [x] **Production Nginx Proxy:** `nginx/nginx.conf` with TLS termination, WebSocket upgrades, rate limiting zones, and HTTP-to-HTTPS redirect.
 - [x] **Environment Configs:** Production `.env.production.example` for backend and dashboard.
-- [x] **Flutter Network Configuration:** `student_app/DEPLOYMENT.md` for building release APKs/bundles pointing to any domain via `--dart-define=API_URL=...`.
+- [x] **Flutter Network Configuration:** `student_app/DEPLOYMENT.md` for building release APKs/bundles pointing to any domain via `--dart-define=API_BASE_URL=...`.
 - [x] **Multi-Tenancy Prisma Models:** Added `Organization` (tenant), `Campus`, and `Block` models with foreign keys in `Student`, `Warden`, and `EmergencyAlert`.
 
 ### 5. Sprint 1: Leave Management & Gate Pass Scaffold

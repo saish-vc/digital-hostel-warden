@@ -199,6 +199,36 @@ describe('worker idempotency guard', () => {
     expect(twilioMock.createMessage).not.toHaveBeenCalled();
   });
 
+  it('records escalatedAt only after the SMS send succeeded', async () => {
+    const student = await createStudent();
+    const alert = await createAlert(student.id);
+
+    await processEscalationJob({ id: 'sent-job', data: { alertId: alert.id } } as Job<{
+      alertId: string;
+    }>);
+
+    expect(twilioMock.createMessage).toHaveBeenCalledTimes(1);
+    const row = await prisma.emergencyAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(row.escalatedAt).toBeInstanceOf(Date);
+  });
+
+  it('leaves escalatedAt null and fails the job when the SMS send fails', async () => {
+    const student = await createStudent();
+    const alert = await createAlert(student.id);
+    twilioMock.createMessage.mockRejectedValueOnce(
+      Object.assign(new Error('invalid To number'), { status: 400 }),
+    );
+
+    await expect(
+      processEscalationJob({ id: 'failed-job', data: { alertId: alert.id } } as Job<{
+        alertId: string;
+      }>),
+    ).rejects.toThrow('invalid To number');
+
+    const row = await prisma.emergencyAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(row.escalatedAt).toBeNull();
+  });
+
   it('does not throw for an alert that no longer exists', async () => {
     const fakeJob = {
       id: 'missing-alert-job',
@@ -217,6 +247,8 @@ describe('SMS service failure modes', () => {
     'TWILIO_AUTH_TOKEN',
     'TWILIO_FROM_NUMBER',
     'WARDEN_ONCALL_PHONE',
+    'SMS_MOCK_OUTCOME',
+    'NODE_ENV',
   ] as const;
   const originalSmsEnv = Object.fromEntries(
     SMS_ENV_KEYS.map((key) => [key, process.env[key]]),
@@ -244,6 +276,32 @@ describe('SMS service failure modes', () => {
 
     await expect(sendEscalationSms(smsAlert)).rejects.toThrow(/not implemented/);
     expect(twilioMock.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('mock provider returns a MOCK receipt without calling Twilio', async () => {
+    process.env.SMS_PROVIDER = 'mock';
+    process.env.NODE_ENV = 'test';
+
+    await expect(sendEscalationSms(smsAlert)).resolves.toEqual({
+      receiptId: 'MOCK-alert-sms-unit',
+      to: 'mock',
+    });
+    expect(twilioMock.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('mock provider throws when SMS_MOCK_OUTCOME=fail', async () => {
+    process.env.SMS_PROVIDER = 'mock';
+    process.env.NODE_ENV = 'test';
+    process.env.SMS_MOCK_OUTCOME = 'fail';
+
+    await expect(sendEscalationSms(smsAlert)).rejects.toThrow(/mock SMS failure/);
+  });
+
+  it('mock provider is refused under NODE_ENV=production', async () => {
+    process.env.SMS_PROVIDER = 'mock';
+    process.env.NODE_ENV = 'production';
+
+    await expect(sendEscalationSms(smsAlert)).rejects.toThrow(/refused/);
   });
 
   it('refuses to send without Twilio credentials', async () => {

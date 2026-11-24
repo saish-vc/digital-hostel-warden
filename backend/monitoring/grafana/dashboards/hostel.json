@@ -114,7 +114,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max(bullmq_jobs{state=\"failed\"})",
+          "expr": "max(bullmq_jobs{state=\"failed\"}) or vector(0)",
           "instant": false,
           "legendFormat": "failed escalations (current)",
           "range": true,
@@ -198,7 +198,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(sos_overrides_total)",
+          "expr": "sum(sos_overrides_total) or vector(0)",
           "instant": true,
           "legendFormat": "break-glass overrides",
           "range": false,
@@ -278,7 +278,8 @@
         }
       ],
       "type": "stat",
-      "title": "SOS rate (last 5m)"
+      "title": "SOS rate (last 5m)",
+      "interval": "15s"
     },
     {
       "datasource": {
@@ -342,7 +343,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (status) (alerts_by_status)",
+          "expr": "max by (status) (alerts_by_status) or vector(0)",
           "instant": true,
           "legendFormat": "{{status}}",
           "range": false,
@@ -410,7 +411,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(escalations_fired_total[$__rate_interval]))",
+          "expr": "sum(increase(escalations_fired_total[$__rate_interval])) or vector(0)",
           "legendFormat": "escalations fired (SMS sent)",
           "range": true,
           "refId": "A"
@@ -421,7 +422,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(increase(escalations_cancelled_total[$__rate_interval]))",
+          "expr": "sum(increase(escalations_cancelled_total[$__rate_interval])) or vector(0)",
           "legendFormat": "escalations cancelled (warden ack first)",
           "range": true,
           "refId": "B"
@@ -513,7 +514,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(socket_io_connected)",
+          "expr": "sum(socket_io_connected) or vector(0)",
           "instant": true,
           "legendFormat": "connected sockets",
           "range": false,
@@ -581,14 +582,15 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)) or vector(0)",
           "legendFormat": "{{route}}",
           "range": true,
           "refId": "A"
         }
       ],
       "type": "timeseries",
-      "title": "HTTP p95 latency by route (5m)"
+      "title": "HTTP p95 latency by route (5m)",
+      "interval": "15s"
     },
     {
       "datasource": {
