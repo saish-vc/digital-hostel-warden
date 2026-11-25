@@ -49,11 +49,14 @@ class _LeaveApplyScreenState extends State<LeaveApplyScreen> {
   }
 
   Future<DateTime?> _pickDateTime(DateTime initial) async {
+    final now = DateTime.now();
     final date = await showDatePicker(
       context: context,
       initialDate: initial,
-      firstDate: DateTime.now().subtract(const Duration(days: 1)),
-      lastDate: DateTime.now().add(const Duration(days: 60)),
+      // The backend rejects a departure in the past; the picker should not
+      // offer yesterday in the first place.
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: now.add(const Duration(days: 60)),
     );
     if (date == null || !mounted) return null;
 
@@ -90,6 +93,11 @@ class _LeaveApplyScreenState extends State<LeaveApplyScreen> {
 
     if (!_expectedReturn.isAfter(_departure)) {
       _showError('Expected return must be after departure.');
+      return;
+    }
+
+    if (_departure.isBefore(DateTime.now().subtract(const Duration(minutes: 1)))) {
+      _showError('Departure cannot be in the past.');
       return;
     }
 
@@ -197,6 +205,14 @@ class _LeaveApplyScreenState extends State<LeaveApplyScreen> {
                 value: _departure,
                 onTap: _submitting ? null : _pickDeparture,
               ),
+              if (_departure.isBefore(DateTime.now()))
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Departure cannot be in the past.',
+                    style: TextStyle(color: Colors.redAccent, fontSize: 13),
+                  ),
+                ),
               const SizedBox(height: 12),
               _DateTimeTile(
                 label: 'Expected return',

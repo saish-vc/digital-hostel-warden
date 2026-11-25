@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/leave.dart';
 import '../services/api.dart';
+import '../services/socket.dart';
 import 'gate_pass_qr_screen.dart';
 import 'leave_apply_screen.dart';
 
@@ -23,13 +24,39 @@ class _LeaveStatusScreenState extends State<LeaveStatusScreen> {
   void initState() {
     super.initState();
     _load();
+    _connectSocket();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  @override
+  void dispose() {
+    SocketService.instance.disconnect();
+    super.dispose();
+  }
+
+  /// Live status: approval, rejection, cancellation, departure and return are
+  /// pushed by the server to `student:<id>`. A silent reload keeps the list on
+  /// screen instead of flashing the loading state for every event.
+  Future<void> _connectSocket() async {
+    final token = await ApiService.token;
+    if (token == null || !mounted) return;
+
+    SocketService.instance.connect(
+      token,
+      onAlertUpdated: (_) {},
+      onLeaveEvent: (_) {
+        if (!mounted) return;
+        _load(silent: true);
+      },
+    );
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
 
     try {
       final rows = await ApiService.myLeaves();
@@ -37,15 +64,16 @@ class _LeaveStatusScreenState extends State<LeaveStatusScreen> {
       setState(() {
         _leaves = rows.map(LeaveRequest.fromJson).toList(growable: false);
         _loading = false;
+        _error = null;
       });
     } on ApiException catch (error) {
-      if (!mounted) return;
+      if (!mounted || silent) return;
       setState(() {
         _error = error.message;
         _loading = false;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || silent) return;
       setState(() {
         _error = 'Could not reach the hostel server.';
         _loading = false;
@@ -67,6 +95,9 @@ class _LeaveStatusScreenState extends State<LeaveStatusScreen> {
     // The pass screen may have recorded an off-campus SOS or the warden may
     // have marked departure while it was open; reload so the list agrees.
     await _load();
+    // The SOS confirmation screen owns the shared socket, so re-attach the
+    // status listeners when we come back.
+    await _connectSocket();
   }
 
   Future<void> _cancel(LeaveRequest leave) async {

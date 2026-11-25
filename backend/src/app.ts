@@ -243,6 +243,9 @@ export function createApp(): AppBundle {
   app.use('/alerts', alertRoutes);
   app.use('/wardens', wardenRoutes);
   app.use('/leaves', leaveRoutes);
+  // Singular alias for the same router. The dashboard, Flutter app and
+  // existing tests use /leaves; the leave-approval API contract names /leave.
+  app.use('/leave', leaveRoutes);
   // Narrow, secret-guarded cleanup door for load-test/sos.js (see the file).
   app.use('/loadtest', loadtestRoutes);
   // Worker -> socket layer relay (see the file for why the worker cannot emit).

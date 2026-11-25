@@ -17,6 +17,7 @@ class SocketService {
   sio.Socket connect(
     String token, {
     required void Function(Map<String, dynamic> alert) onAlertUpdated,
+    void Function(Map<String, dynamic> leave)? onLeaveEvent,
   }) {
     disconnect();
 
@@ -46,6 +47,24 @@ class SocketService {
         onAlertUpdated(Map<String, dynamic>.from(data));
       }
     });
+
+    // Leave lifecycle: the server targets `student:<id>` on approval,
+    // rejection, cancellation, departure and return. The payload is the full
+    // updated row, so the status screen can re-render from it directly.
+    if (onLeaveEvent != null) {
+      for (final event in const [
+        'leave:updated',
+        'leave:departed',
+        'leave:returned',
+        'leave:cancelled',
+      ]) {
+        socket.on(event, (data) {
+          if (data is Map) {
+            onLeaveEvent(Map<String, dynamic>.from(data));
+          }
+        });
+      }
+    }
 
     _socket = socket;
     return socket;
