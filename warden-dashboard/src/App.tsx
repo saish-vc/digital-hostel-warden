@@ -15,8 +15,9 @@ import type { AppView } from './components/AppHeader';
  * back work.
  */
 function viewFromPath(): AppView {
-  if (window.location.pathname === '/history') return 'history';
-  if (window.location.pathname === '/leaves') return 'leaves';
+  const path = window.location.pathname.replace(/\/+$/, '');
+  if (path === '/history') return 'history';
+  if (path === '/leaves') return 'leaves';
   return 'board';
 }
 

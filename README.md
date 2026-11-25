@@ -158,6 +158,20 @@ dashboard. See `docs/DEMO_SETUP.md` for the scrape config and the
 
 ---
 
+## Azure deployment
+
+A cost-conscious single-VM deployment is provided in `deploy/azure/`: Ubuntu,
+Docker Compose, nginx with Let's Encrypt HTTPS, the dashboard, two APIs, one
+escalation worker, one leave worker, PostgreSQL and Redis. PostgreSQL and Redis
+are not published on host ports. No monitoring stack is included by default.
+
+See [`deploy/azure/README.md`](deploy/azure/README.md) for VM creation, DNS,
+certificates, environment variables, migration, backups, smoke tests, costs and
+VM deallocation. The Flutter app is built separately with
+`--dart-define=API_BASE_URL=https://<domain>`; it is not a server.
+
+---
+
 ## Tests
 
 ```bash
@@ -206,6 +220,6 @@ the dashboard pill reads `SMS is not configured` when Twilio is absent.
 
 ## Status
 
-Feature-complete and demo-ready. Not deployed to production: Twilio, FCM and an
-Android emulator are unconfigured on the build machine, and HTTPS termination
-plus token refresh are documented next steps rather than implemented ones.
+Demo-ready. The Azure Compose deployment is provided but has not been verified on
+Azure; real Twilio, FCM and Android-device verification require external accounts
+and devices. Authentication token refresh remains future work.

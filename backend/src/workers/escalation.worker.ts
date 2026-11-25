@@ -1,7 +1,6 @@
 import http from 'http';
 import { Worker } from 'bullmq';
 import { createRedisConnection } from '../config/redis';
-import { prisma } from '../config/prisma';
 import { logger } from '../config/logger';
 import { register } from '../config/metrics';
 import type { EscalationJobData } from '../queues/escalation.queue';
@@ -102,21 +101,3 @@ worker.on('error', (error) => {
   // problems (e.g. a Redis hiccup) without killing the process.
   logger.error({ err: error.message }, '[worker] worker error');
 });
-
-async function shutdown(signal: string): Promise<void> {
-  logger.info({ signal }, '[worker] signal received, closing worker');
-  metricsServer.close();
-  try {
-    // Await close() so any in-flight job attempt finishes cleanly and the
-    // worker stops itself pulling new jobs before the process exits.
-    await worker.close();
-  } finally {
-    prisma
-      .$disconnect()
-      .catch(() => undefined)
-      .finally(() => process.exit(0));
-  }
-}
-
-process.on('SIGINT', () => void shutdown('SIGINT'));
-process.on('SIGTERM', () => void shutdown('SIGTERM'));

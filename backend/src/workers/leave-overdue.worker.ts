@@ -132,20 +132,3 @@ worker.on('failed', (job, error) => {
 worker.on('error', (error) => {
   logger.error({ err: error.message }, '[leave-worker] worker error');
 });
-
-async function shutdown(signal: string): Promise<void> {
-  logger.info({ signal }, '[leave-worker] shutting down');
-  metricsServer.close();
-  try {
-    await worker.close();
-    await leaveOverdueQueue.close();
-  } finally {
-    prisma
-      .$disconnect()
-      .catch(() => undefined)
-      .finally(() => process.exit(0));
-  }
-}
-
-process.on('SIGINT', () => void shutdown('SIGINT'));
-process.on('SIGTERM', () => void shutdown('SIGTERM'));

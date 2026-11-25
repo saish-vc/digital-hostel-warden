@@ -1,0 +1,22 @@
+#cloud-config
+# Ubuntu 22.04/24.04: use Ubuntu's signed archive packages, not a remote script.
+# Azure NSG must separately permit inbound TCP 22, 80 and 443.
+# Enable universe for docker-compose-v2 before installing archive packages.
+package_update: true
+packages:
+  - software-properties-common
+  - ufw
+runcmd:
+  # Preserve SSH reachability even while package installation is in progress.
+  - [ufw, allow, OpenSSH]
+  - [ufw, allow, 22/tcp]
+  - [add-apt-repository, --yes, universe]
+  - [apt-get, update]
+  - [env, DEBIAN_FRONTEND=noninteractive, apt-get, install, -y, git, docker.io, docker-buildx, docker-compose-v2, certbot, curl, python3]
+  - [systemctl, enable, --now, docker]
+  # Retain existing firewall rules and policies.
+  - [ufw, allow, 80/tcp]
+  - [ufw, allow, 443/tcp]
+  - [ufw, --force, enable]
+  - [install, -d, -m, '0755', /var/lib/hostelguard/acme]
+  - [docker, compose, version]

@@ -3,14 +3,9 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import { createApp } from './app';
 import { resolvePort, instanceId } from './config/instance';
 import { logger } from './config/logger';
-import {
-  setAlertsByStatus,
-  startQueueMetrics,
-  stopQueueMetrics,
-} from './config/metrics';
+import { setAlertsByStatus, startQueueMetrics } from './config/metrics';
 import { prisma } from './config/prisma';
 import { createAdapterConnection } from './config/redis';
-import { closeRateLimiter } from './middleware/rateLimiters';
 import { escalationQueue } from './queues/escalation.queue';
 
 const PORT = resolvePort();
@@ -18,7 +13,7 @@ const PORT = resolvePort();
 const HOST = '0.0.0.0';
 
 logger.info(
-  { host: HOST, port: PORT, redis: process.env.REDIS_URL ?? '(default)' },
+  { host: HOST, port: PORT },
   '[api] booting',
 );
 
@@ -87,27 +82,3 @@ httpServer.listen(PORT, HOST, () => {
     '[api] listening (Socket.IO Redis adapter attached, pub + sub)',
   );
 });
-
-async function shutdown(signal: string): Promise<void> {
-  logger.info({ signal, instanceId: instanceId() }, '[api] shutting down');
-  await new Promise<void>((resolve) => io.close(() => resolve()));
-
-  if (httpServer.listening) {
-    httpServer.close();
-  }
-
-  stopQueueMetrics();
-
-  // Adapter clients + the rate-limit store are separate connections; closing
-  // them avoids leaving half-open sockets on a rolling restart.
-  await Promise.allSettled([
-    adapterPubClient.quit(),
-    adapterSubClient.quit(),
-    closeRateLimiter(),
-  ]);
-  await prisma.$disconnect();
-  process.exit(0);
-}
-
-process.on('SIGINT', () => void shutdown('SIGINT'));
-process.on('SIGTERM', () => void shutdown('SIGTERM'));

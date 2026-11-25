@@ -11,7 +11,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build
 # ---------------------------------------------------------------------------
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -28,13 +28,24 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-# Prune dev dependencies for a leaner production image
-RUN npm prune --production
+# Migrations need the lockfile-pinned dev Prisma CLI, not a downloaded npx copy.
+FROM builder AS migration
+USER node
+CMD ["./node_modules/.bin/prisma", "migrate", "deploy"]
+
+# Keep the builder and migration stages intact; prune only this branch.
+FROM builder AS production-deps
+# npm can retain Prisma as @prisma/client's optional peer; the runtime only
+# needs the generated client and its engine, not the CLI or migration engines.
+RUN npm prune --omit=dev --ignore-scripts && \
+    rm -rf node_modules/prisma node_modules/.bin/prisma node_modules/@prisma/engines \
+      node_modules/@prisma/engines-version node_modules/@prisma/fetch-engine \
+      node_modules/@prisma/get-platform
 
 # ---------------------------------------------------------------------------
-# Stage 2: Production
+# Production runtime
 # ---------------------------------------------------------------------------
-FROM node:20-alpine AS production
+FROM node:24-alpine AS production
 
 # Security: run as non-root
 RUN addgroup -g 1001 -S hostelguard && \
@@ -44,7 +55,7 @@ WORKDIR /app
 
 # Copy only what's needed to run
 COPY --from=builder --chown=hostelguard:hostelguard /app/dist          ./dist
-COPY --from=builder --chown=hostelguard:hostelguard /app/node_modules  ./node_modules
+COPY --from=production-deps --chown=hostelguard:hostelguard /app/node_modules  ./node_modules
 COPY --from=builder --chown=hostelguard:hostelguard /app/prisma        ./prisma
 COPY --from=builder --chown=hostelguard:hostelguard /app/package.json  ./package.json
 

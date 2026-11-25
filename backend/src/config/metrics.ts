@@ -276,7 +276,7 @@ export function startQueueMetrics(
 
 let queueMetricsTimer: NodeJS.Timeout | null = null;
 
-/** Stop the refresh loop (called from index.ts on SIGINT/SIGTERM). */
+/** Stop the refresh loop. */
 export function stopQueueMetrics(): void {
   if (queueMetricsTimer) {
     clearInterval(queueMetricsTimer);

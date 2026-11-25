@@ -14,8 +14,8 @@ interface LoginProps {
 }
 
 export default function Login({ onLogin }: LoginProps) {
-  const [email, setEmail] = useState('warden@hostel.local');
-  const [password, setPassword] = useState('password123');
+  const [email, setEmail] = useState(import.meta.env.DEV ? 'warden@hostel.local' : '');
+  const [password, setPassword] = useState(import.meta.env.DEV ? 'password123' : '');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -103,9 +103,11 @@ export default function Login({ onLogin }: LoginProps) {
           </button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-slate-500">
-          Seed login: warden@hostel.local / password123
-        </p>
+        {import.meta.env.DEV && (
+          <p className="mt-6 text-center text-xs text-slate-500">
+            Seed login: warden@hostel.local / password123
+          </p>
+        )}
       </div>
     </div>
   );
