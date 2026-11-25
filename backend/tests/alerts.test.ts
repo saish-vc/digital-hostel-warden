@@ -208,8 +208,16 @@ describe('GET /alerts', () => {
     const studentB = await createStudent({ name: 'Diya Test', roomNumber: 'A-102' });
     const warden = await createWarden();
 
-    const older = await createAlert(studentA.id, { type: 'MEDICAL' });
-    const newer = await createAlert(studentB.id, { type: 'FIRE' });
+    // Explicit, distinct timestamps: two inserts can share a millisecond, and
+    // an ordering assertion on equal createdAt values is nondeterministic.
+    const older = await createAlert(studentA.id, {
+      type: 'MEDICAL',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const newer = await createAlert(studentB.id, {
+      type: 'FIRE',
+      createdAt: new Date('2026-01-01T00:00:01.000Z'),
+    });
 
     const response = await request(server.app)
       .get('/alerts')

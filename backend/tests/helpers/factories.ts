@@ -68,6 +68,7 @@ export interface AlertOverrides {
   locationAccuracy?: number | null;
   acknowledgedAt?: Date | null;
   acknowledgedBy?: string | null;
+  createdAt?: Date;
 }
 
 export async function createAlert(studentId: string, overrides: AlertOverrides = {}) {
@@ -81,6 +82,7 @@ export async function createAlert(studentId: string, overrides: AlertOverrides =
       locationAccuracy: overrides.locationAccuracy ?? null,
       acknowledgedAt: overrides.acknowledgedAt ?? null,
       acknowledgedBy: overrides.acknowledgedBy ?? null,
+      ...(overrides.createdAt ? { createdAt: overrides.createdAt } : {}),
     },
   });
 }
