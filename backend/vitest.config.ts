@@ -47,10 +47,12 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       // Process entrypoints: listen/signal-handler wiring with no testable
       // logic. The escalation decision logic lives in escalation.processor.ts,
-      // which is fully covered by tests/escalation.test.ts.
+      // which is fully covered by tests/escalation.test.ts. The leave scan
+      // lives in leave-overdue.processor.ts and is covered by its own suite.
       exclude: [
         'src/index.ts',
         'src/workers/escalation.worker.ts',
+        'src/workers/leave-overdue.worker.ts',
         'src/**/*.d.ts',
       ],
       thresholds: {

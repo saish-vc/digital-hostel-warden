@@ -1,9 +1,9 @@
 import http from 'http';
 import { Worker, Queue } from 'bullmq';
 import { createRedisConnection } from '../config/redis';
-import { prisma } from '../config/prisma';
 import { logger } from '../config/logger';
-import { leaveOverdueTotal, leaveCurrentlyAway, register } from '../config/metrics';
+import { register } from '../config/metrics';
+import { markOverdueLeaves } from './leave-overdue.processor';
 
 /**
  * Leave-overdue worker — scans for DEPARTED leaves whose expectedReturn
@@ -76,44 +76,7 @@ void leaveOverdueQueue.upsertJobScheduler(
 const worker = new Worker(
   'leave-overdue',
   async () => {
-    const now = new Date();
-
-    // Find all DEPARTED leaves whose expectedReturn has passed
-    const overdueLeaves = await prisma.leaveRequest.findMany({
-      where: {
-        status: 'DEPARTED',
-        expectedReturn: { lt: now },
-      },
-      select: { id: true, studentId: true, expectedReturn: true },
-    });
-
-    if (overdueLeaves.length === 0) {
-      logger.debug('[leave-worker] no overdue leaves found');
-      return;
-    }
-
-    // Batch update to OVERDUE
-    const ids = overdueLeaves.map((l) => l.id);
-    const result = await prisma.leaveRequest.updateMany({
-      where: { id: { in: ids }, status: 'DEPARTED' },
-      data: {
-        status: 'OVERDUE',
-        overdueNotifiedAt: now,
-      },
-    });
-
-    leaveOverdueTotal.inc(result.count);
-
-    // Refresh currently-away gauge
-    const awayCount = await prisma.leaveRequest.count({
-      where: { status: 'DEPARTED' },
-    });
-    leaveCurrentlyAway.set(awayCount);
-
-    logger.warn(
-      { count: result.count, ids },
-      '[leave-worker] marked leaves as OVERDUE',
-    );
+    await markOverdueLeaves();
   },
   { connection, concurrency: 1 },
 );
