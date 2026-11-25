@@ -11,6 +11,7 @@ import {
   type LeaveStats,
 } from '../api/client';
 import AppHeader, { type AppView } from '../components/AppHeader';
+import { useLeaveSocket } from '../hooks/useLeaveSocket';
 
 interface LeavesProps {
   userName: string;
@@ -18,13 +19,22 @@ interface LeavesProps {
   onLogout: () => void;
 }
 
-type Tab = 'pending' | 'approved' | 'away' | 'overdue';
+type Tab = 'pending' | 'approved' | 'away' | 'overdue' | 'history';
+type HistoryFilter = 'ALL' | 'REJECTED' | 'CANCELLED' | 'RETURNED';
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'pending', label: 'Pending approvals' },
   { id: 'approved', label: 'Approved passes' },
   { id: 'away', label: 'Currently away' },
   { id: 'overdue', label: 'Overdue' },
+  { id: 'history', label: 'History & filters' },
+];
+
+const HISTORY_FILTERS: Array<{ id: HistoryFilter; label: string }> = [
+  { id: 'ALL', label: 'All' },
+  { id: 'REJECTED', label: 'Rejected' },
+  { id: 'CANCELLED', label: 'Cancelled' },
+  { id: 'RETURNED', label: 'Returned' },
 ];
 
 const LEAVE_TYPES: Record<string, string> = {
@@ -78,9 +88,17 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
-  const [rejectTarget, setRejectTarget] = useState<LeaveRequest | null>(null);
-  const [rejectRemarks, setRejectRemarks] = useState('');
-  const [rejectBusy, setRejectBusy] = useState(false);
+  // Requests that arrived over the socket while the warden was looking at a
+  // tab that cannot show them. Never let a submission go unseen.
+  const [newRequests, setNewRequests] = useState(0);
+
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('ALL');
+  const [historyRows, setHistoryRows] = useState<LeaveRequest[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [decisionTarget, setDecisionTarget] = useState<LeaveRequest | null>(null);
+  const [decisionNote, setDecisionNote] = useState('');
+  const [decisionBusy, setDecisionBusy] = useState<'APPROVED' | 'REJECTED' | null>(null);
 
   const [gateOpen, setGateOpen] = useState(false);
   const [gateCode, setGateCode] = useState('');
@@ -103,6 +121,9 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
       setApproved(approvedPasses.data);
       setAway(active);
       setOverdue(overdueRows);
+      // Another warden may have cleared the queue; the banner must not keep
+      // claiming "N waiting" once nothing is pending.
+      if (submitted.data.length === 0) setNewRequests(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load leave requests');
     } finally {
@@ -110,9 +131,35 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
     }
   }, []);
 
+  const loadHistory = useCallback(async (filter: HistoryFilter) => {
+    setHistoryLoading(true);
+    try {
+      const result = await fetchLeaves({
+        status: filter === 'ALL' ? undefined : filter,
+        limit: 100,
+      });
+      setHistoryRows(result.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load leave history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadHistory(historyFilter);
+  }, [historyFilter, loadHistory]);
+
+  // Live board: the server emits every leave transition to the wardens room.
+  useLeaveSocket((event) => {
+    if (event === 'created') setNewRequests((count) => count + 1);
+    void load(false);
+    void loadHistory(historyFilter);
+  });
 
   useEffect(() => {
     if (!toast) return;
@@ -122,35 +169,39 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
 
   const showToast = (kind: 'success' | 'error', text: string) => setToast({ kind, text });
 
-  async function approve(leave: LeaveRequest) {
-    setBusyId(leave.id);
-    try {
-      const updated = await reviewLeave(leave.id, 'APPROVED');
-      showToast(
-        'success',
-        `Approved ${leave.student.name} — gate pass ${updated.gatePassCode ?? 'issued'}.`,
-      );
-      await load(false);
-    } catch (err) {
-      showToast('error', err instanceof Error ? err.message : 'Could not approve the request');
-    } finally {
-      setBusyId(null);
-    }
+  function selectTab(next: Tab) {
+    setTab(next);
+    if (next === 'pending') setNewRequests(0);
   }
 
-  async function confirmReject() {
-    if (!rejectTarget) return;
-    setRejectBusy(true);
+  function openDecision(leave: LeaveRequest) {
+    setDecisionTarget(leave);
+    setDecisionNote(leave.reviewRemarks ?? '');
+  }
+
+  async function decide(status: 'APPROVED' | 'REJECTED') {
+    if (!decisionTarget) return;
+    setDecisionBusy(status);
     try {
-      await reviewLeave(rejectTarget.id, 'REJECTED', rejectRemarks.trim() || undefined);
-      showToast('success', `Rejected ${rejectTarget.student.name}'s request.`);
-      setRejectTarget(null);
-      setRejectRemarks('');
+      const updated = await reviewLeave(
+        decisionTarget.id,
+        status,
+        decisionNote.trim() || undefined,
+      );
+      showToast(
+        'success',
+        status === 'APPROVED'
+          ? `Approved ${decisionTarget.student.name} — gate pass ${updated.gatePassCode ?? 'issued'}.`
+          : `Rejected ${decisionTarget.student.name}'s request.`,
+      );
+      setDecisionTarget(null);
+      setDecisionNote('');
       await load(false);
+      void loadHistory(historyFilter);
     } catch (err) {
-      showToast('error', err instanceof Error ? err.message : 'Could not reject the request');
+      showToast('error', err instanceof Error ? err.message : 'Could not record the decision');
     } finally {
-      setRejectBusy(false);
+      setDecisionBusy(null);
     }
   }
 
@@ -160,6 +211,7 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
       await recordGateReturn(leave.id);
       showToast('success', `${leave.student.name} is back in the hostel.`);
       await load(false);
+      void loadHistory(historyFilter);
     } catch (err) {
       showToast('error', err instanceof Error ? err.message : 'Could not record the return');
     } finally {
@@ -200,6 +252,7 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
         setGateOpen(false);
         setGateCode('');
         await load(false);
+        void loadHistory(historyFilter);
         return;
       }
 
@@ -215,6 +268,7 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
         setGateOpen(false);
         setGateCode('');
         await load(false);
+        void loadHistory(historyFilter);
         return;
       }
 
@@ -226,7 +280,18 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
     }
   }
 
-  const rows = tab === 'pending' ? pending : tab === 'approved' ? approved : tab === 'away' ? away : overdue;
+  const rows =
+    tab === 'pending'
+      ? pending
+      : tab === 'approved'
+        ? approved
+        : tab === 'away'
+          ? away
+          : tab === 'overdue'
+            ? overdue
+            : historyRows;
+
+  const showSpinner = tab === 'history' ? historyLoading : loading;
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -240,7 +305,10 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
         </button>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={() => {
+            void load();
+            void loadHistory(historyFilter);
+          }}
           className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
         >
           Refresh
@@ -254,37 +322,66 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
             value={stats?.pendingApprovals ?? pending.length}
             accent="text-amber-300"
             active={tab === 'pending'}
-            onClick={() => setTab('pending')}
+            onClick={() => selectTab('pending')}
           />
           <StatCard
             label="Approved passes"
             value={stats?.approvedPasses ?? approved.length}
             accent="text-emerald-300"
             active={tab === 'approved'}
-            onClick={() => setTab('approved')}
+            onClick={() => selectTab('approved')}
           />
           <StatCard
             label="Currently away"
             value={stats?.currentlyAway ?? away.length}
             accent="text-sky-300"
             active={tab === 'away'}
-            onClick={() => setTab('away')}
+            onClick={() => selectTab('away')}
           />
           <StatCard
             label="Overdue"
             value={stats?.overdueCount ?? overdue.length}
             accent="text-red-300"
             active={tab === 'overdue'}
-            onClick={() => setTab('overdue')}
+            onClick={() => selectTab('overdue')}
           />
         </div>
+
+        {newRequests > 0 && (
+          <div
+            role="alert"
+            data-testid="new-leave-banner"
+            className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-amber-700 bg-amber-950/60 px-4 py-3 text-sm text-amber-100"
+          >
+            <p className="font-medium">
+              🔔 {newRequests} new leave request{newRequests === 1 ? '' : 's'} waiting for review
+            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => selectTab('pending')}
+                className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-600"
+              >
+                Review
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewRequests(0)}
+                aria-label="Dismiss new-leave banner"
+                className="rounded px-2 text-amber-300 hover:text-amber-100"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="mb-4 flex flex-wrap gap-2">
           {TABS.map((entry) => (
             <button
               key={entry.id}
               type="button"
-              onClick={() => setTab(entry.id)}
+              onClick={() => selectTab(entry.id)}
               aria-current={tab === entry.id ? 'page' : undefined}
               className={`rounded-lg px-3 py-1.5 text-sm transition ${
                 tab === entry.id
@@ -296,6 +393,26 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
             </button>
           ))}
         </div>
+
+        {tab === 'history' && (
+          <div className="mb-4 flex flex-wrap gap-2" aria-label="History status filter">
+            {HISTORY_FILTERS.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => setHistoryFilter(entry.id)}
+                aria-pressed={historyFilter === entry.id}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                  historyFilter === entry.id
+                    ? 'border-slate-500 bg-slate-800 text-white'
+                    : 'border-slate-700 text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+                }`}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {toast && (
           <p
@@ -316,13 +433,13 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
           </p>
         )}
 
-        {loading ? (
+        {showSpinner ? (
           <p className="py-16 text-center text-slate-400">Loading leave requests…</p>
         ) : rows.length === 0 ? (
-          <EmptyState tab={tab} />
+          <EmptyState tab={tab} historyFilter={historyFilter} />
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900">
-            <table className="w-full min-w-[1000px] text-left text-sm">
+            <table className="w-full min-w-[1100px] text-left text-sm">
               <thead className="border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3">Student</th>
@@ -331,6 +448,7 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
                   <th className="px-4 py-3">Destination</th>
                   <th className="px-4 py-3">Departure</th>
                   <th className="px-4 py-3">Expected return</th>
+                  <th className="px-4 py-3">Created</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Actions</th>
                 </tr>
@@ -356,6 +474,7 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
                         <p className="text-xs text-red-300">{lateBy(leave.expectedReturn)}</p>
                       )}
                     </td>
+                    <td className="px-4 py-3 text-slate-400">{formatDateTime(leave.createdAt)}</td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-block rounded-full border px-2 py-0.5 text-xs font-semibold ${
@@ -367,31 +486,25 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
                       {leave.gatePassCode && (
                         <p className="mt-1 font-mono text-xs text-slate-400">{leave.gatePassCode}</p>
                       )}
+                      {leave.reviewRemarks && (
+                        <p className="mt-1 max-w-[220px] truncate text-xs text-amber-300" title={leave.reviewRemarks}>
+                          {leave.reviewRemarks}
+                        </p>
+                      )}
+                      {leave.reviewer && (
+                        <p className="mt-1 text-xs text-slate-500">by {leave.reviewer.name}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
                         {tab === 'pending' && (
-                          <>
-                            <button
-                              type="button"
-                              disabled={busyId === leave.id}
-                              onClick={() => void approve(leave)}
-                              className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-600 disabled:opacity-50"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busyId === leave.id}
-                              onClick={() => {
-                                setRejectTarget(leave);
-                                setRejectRemarks('');
-                              }}
-                              className="rounded-lg border border-red-700 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:bg-red-950/50 disabled:opacity-50"
-                            >
-                              Reject
-                            </button>
-                          </>
+                          <button
+                            type="button"
+                            onClick={() => openDecision(leave)}
+                            className="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600"
+                          >
+                            Review
+                          </button>
                         )}
                         {tab === 'approved' && (
                           <button
@@ -422,43 +535,79 @@ export default function Leaves({ userName, onNavigate, onLogout }: LeavesProps) 
         )}
       </main>
 
-      {/* Reject dialog */}
-      {rejectTarget && (
+      {/* Decision dialog: details + optional note + both decisions */}
+      {decisionTarget && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6">
-            <h2 className="text-lg font-bold text-white">Reject leave request</h2>
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6">
+            <h2 className="text-lg font-bold text-white">Review leave request</h2>
             <p className="mt-1 text-sm text-slate-400">
-              {rejectTarget.student.name} · Room {rejectTarget.student.roomNumber} ·{' '}
-              {LEAVE_TYPES[rejectTarget.type] ?? rejectTarget.type}
+              {decisionTarget.student.name} · Room {decisionTarget.student.roomNumber} ·{' '}
+              {LEAVE_TYPES[decisionTarget.type] ?? decisionTarget.type}
             </p>
+
+            <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Destination</dt>
+                <dd className="text-slate-200">{decisionTarget.destination}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Contact</dt>
+                <dd className="text-slate-200">{decisionTarget.emergencyContact}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Departure</dt>
+                <dd className="text-slate-200">{formatDateTime(decisionTarget.departureTime)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Expected return</dt>
+                <dd className="text-slate-200">{formatDateTime(decisionTarget.expectedReturn)}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Reason</dt>
+                <dd className="text-slate-200">{decisionTarget.reason}</dd>
+              </div>
+            </dl>
+
             <label className="mt-4 block text-sm text-slate-300">
               <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">
-                Reason (shown to the student)
+                Decision note (optional, shown to the student)
               </span>
               <textarea
-                value={rejectRemarks}
-                onChange={(event) => setRejectRemarks(event.target.value)}
+                value={decisionNote}
+                onChange={(event) => setDecisionNote(event.target.value)}
                 rows={3}
                 maxLength={500}
                 className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
                 placeholder="e.g. Guardian consent not on file"
               />
             </label>
-            <div className="mt-5 flex justify-end gap-2">
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setRejectTarget(null)}
+                onClick={() => {
+                  setDecisionTarget(null);
+                  setDecisionNote('');
+                }}
                 className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                disabled={rejectBusy}
-                onClick={() => void confirmReject()}
+                disabled={decisionBusy !== null}
+                onClick={() => void decide('REJECTED')}
                 className="rounded-lg bg-red-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-600 disabled:opacity-50"
               >
-                {rejectBusy ? 'Rejecting…' : 'Reject request'}
+                {decisionBusy === 'REJECTED' ? 'Rejecting…' : 'Reject request'}
+              </button>
+              <button
+                type="button"
+                disabled={decisionBusy !== null}
+                onClick={() => void decide('APPROVED')}
+                className="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {decisionBusy === 'APPROVED' ? 'Approving…' : 'Approve & issue pass'}
               </button>
             </div>
           </div>
@@ -542,12 +691,16 @@ function StatCard({
   );
 }
 
-function EmptyState({ tab }: { tab: Tab }) {
+function EmptyState({ tab, historyFilter }: { tab: Tab; historyFilter: HistoryFilter }) {
   const copy: Record<Tab, string> = {
     pending: 'No leave requests waiting for review.',
     approved: 'No approved passes waiting at the gate.',
     away: 'Everyone is inside the hostel right now.',
     overdue: 'No student is past their expected return.',
+    history:
+      historyFilter === 'ALL'
+        ? 'No leave requests have been reviewed or cancelled yet.'
+        : `No ${historyFilter.toLowerCase()} leave requests.`,
   };
 
   return (

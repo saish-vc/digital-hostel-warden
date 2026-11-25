@@ -72,6 +72,19 @@ router.post(
       return;
     }
 
+    const reasonText = String(reason).trim();
+    const destinationText = String(destination).trim();
+
+    if (reasonText.length < 3 || reasonText.length > 500) {
+      res.status(400).json({ error: 'reason must be 3-500 characters' });
+      return;
+    }
+
+    if (destinationText.length < 2 || destinationText.length > 200) {
+      res.status(400).json({ error: 'destination must be 2-200 characters' });
+      return;
+    }
+
     const depDate = new Date(departureTime);
     const retDate = new Date(expectedReturn);
 
@@ -82,6 +95,13 @@ router.post(
 
     if (retDate <= depDate) {
       res.status(400).json({ error: 'expectedReturn must be after departureTime' });
+      return;
+    }
+
+    // 60s of clock skew is tolerated so a student's phone that is a few
+    // seconds behind cannot be rejected for "now".
+    if (depDate.getTime() < Date.now() - 60_000) {
+      res.status(400).json({ error: 'departureTime must not be in the past' });
       return;
     }
 
@@ -97,8 +117,8 @@ router.post(
         data: {
           studentId,
           type,
-          reason: String(reason).trim(),
-          destination: String(destination).trim(),
+          reason: reasonText,
+          destination: destinationText,
           emergencyContact: contact,
           departureTime: depDate,
           expectedReturn: retDate,
@@ -350,135 +370,179 @@ router.get(
 
 // ---------------------------------------------------------------------------
 // 8. DELETE /leaves/:id — Student cancels a submitted leave request
+//    PATCH  /leaves/:id/cancel — same action, verb-style alias
 // ---------------------------------------------------------------------------
-router.delete(
-  '/:id',
-  authenticate,
-  requireRole('STUDENT'),
-  async (req: Request, res: Response): Promise<void> => {
-    const studentId = req.user!.id;
-    const id = param(req, 'id');
+async function cancelOwnLeave(req: Request, res: Response): Promise<void> {
+  const studentId = req.user!.id;
+  const id = param(req, 'id');
+
+  try {
+    const leave = await prisma.leaveRequest.findUnique({
+      where: { id },
+    });
+
+    if (!leave) {
+      res.status(404).json({ error: 'Leave request not found' });
+      return;
+    }
+
+    if (leave.studentId !== studentId) {
+      res.status(403).json({ error: 'Forbidden: not your leave request' });
+      return;
+    }
+
+    if (leave.status !== 'SUBMITTED') {
+      res.status(409).json({
+        error: `Cannot cancel leave in ${leave.status} status. Only SUBMITTED leaves can be cancelled.`,
+      });
+      return;
+    }
+
+    const updated = await prisma.leaveRequest.update({
+      where: { id },
+      data: { status: 'CANCELLED' },
+    });
 
     try {
-      const leave = await prisma.leaveRequest.findUnique({
-        where: { id },
-      });
-
-      if (!leave) {
-        res.status(404).json({ error: 'Leave request not found' });
-        return;
-      }
-
-      if (leave.studentId !== studentId) {
-        res.status(403).json({ error: 'Forbidden: not your leave request' });
-        return;
-      }
-
-      if (leave.status !== 'SUBMITTED') {
-        res.status(409).json({
-          error: `Cannot cancel leave in ${leave.status} status. Only SUBMITTED leaves can be cancelled.`,
-        });
-        return;
-      }
-
-      const updated = await prisma.leaveRequest.update({
-        where: { id },
-        data: { status: 'CANCELLED' },
-      });
-
-      try {
-        const io = getIO();
-        io.to('wardens').emit('leave:cancelled', { id, studentId });
-      } catch (ioErr) {
-        logger.warn({ err: ioErr }, '[socket] could not emit leave:cancelled');
-      }
-
-      logger.info({ leaveId: id, studentId }, '[leave] request cancelled by student');
-      res.json(updated);
-    } catch (error) {
-      logger.error({ err: error, id }, '[leave] failed to cancel leave request');
-      res.status(500).json({ error: 'Could not cancel leave request' });
+      const io = getIO();
+      io.to('wardens').emit('leave:cancelled', { id, studentId });
+      // The student's own other devices (e.g. a tablet left on the status
+      // screen) should drop the request from "pending" too.
+      io.to(`student:${studentId}`).emit('leave:cancelled', updated);
+    } catch (ioErr) {
+      logger.warn({ err: ioErr }, '[socket] could not emit leave:cancelled');
     }
-  },
-);
+
+    logger.info({ leaveId: id, studentId }, '[leave] request cancelled by student');
+    res.json(updated);
+  } catch (error) {
+    logger.error({ err: error, id }, '[leave] failed to cancel leave request');
+    res.status(500).json({ error: 'Could not cancel leave request' });
+  }
+}
+
+router.delete('/:id', authenticate, requireRole('STUDENT'), cancelOwnLeave);
+router.patch('/:id/cancel', authenticate, requireRole('STUDENT'), cancelOwnLeave);
 
 // ---------------------------------------------------------------------------
 // 9. PATCH /leaves/:id/review — Warden approves or rejects a request
+//    PATCH /leaves/:id/approve — alias for status=APPROVED
+//    PATCH /leaves/:id/reject  — alias for status=REJECTED
 // ---------------------------------------------------------------------------
+type ReviewDecision = 'APPROVED' | 'REJECTED';
+
+/**
+ * The response body accepts `decisionNote` (the API contract used by the
+ * leave-approval spec) as well as `reviewRemarks` (the field the dashboard
+ * and Flutter app have always sent). Same column, two spellings.
+ */
+async function applyReview(
+  req: Request,
+  res: Response,
+  decision: ReviewDecision,
+): Promise<void> {
+  const wardenId = req.user!.id;
+  const id = param(req, 'id');
+  const body = req.body ?? {};
+  const rawNote = body.decisionNote ?? body.reviewRemarks;
+  const note = rawNote === undefined || rawNote === null ? null : String(rawNote).trim();
+
+  if (note !== null && note.length > 500) {
+    res.status(400).json({ error: 'decision note must be 500 characters or fewer' });
+    return;
+  }
+
+  try {
+    const current = await prisma.leaveRequest.findUnique({ where: { id } });
+    if (!current) {
+      res.status(404).json({ error: 'Leave request not found' });
+      return;
+    }
+
+    if (current.status !== 'SUBMITTED') {
+      res.status(409).json({
+        error: `Invalid transition from ${current.status} to ${decision}. Only SUBMITTED requests can be reviewed.`,
+      });
+      return;
+    }
+
+    let gatePassCode: string | undefined = undefined;
+    let gatePassQr: string | undefined = undefined;
+
+    if (decision === 'APPROVED') {
+      // Generate a 6-char hex unique gate pass code
+      gatePassCode = `HG-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      gatePassQr = JSON.stringify({
+        passId: id,
+        code: gatePassCode,
+        studentId: current.studentId,
+        type: current.type,
+        exp: current.expectedReturn.toISOString(),
+      });
+    }
+
+    const updated = await prisma.leaveRequest.update({
+      where: { id },
+      data: {
+        status: decision,
+        reviewedBy: wardenId,
+        reviewedAt: new Date(),
+        reviewRemarks: note && note.length > 0 ? note : null,
+        ...(gatePassCode ? { gatePassCode, gatePassQr } : {}),
+      },
+      include: {
+        student: { select: studentSelect },
+        reviewer: { select: wardenSelect },
+      },
+    });
+
+    leaveRequestsTotal.inc({ type: current.type, status: decision });
+
+    try {
+      const io = getIO();
+      io.to(`student:${current.studentId}`).emit('leave:updated', updated);
+      io.to('wardens').emit('leave:updated', updated);
+    } catch (ioErr) {
+      logger.warn({ err: ioErr }, '[socket] could not emit leave:updated');
+    }
+
+    logger.info({ leaveId: id, status: decision, wardenId }, '[leave] reviewed by warden');
+    res.json(updated);
+  } catch (error) {
+    logger.error({ err: error, id }, '[leave] failed to review leave');
+    res.status(500).json({ error: 'Could not process leave review' });
+  }
+}
+
 router.patch(
   '/:id/review',
   authenticate,
   requireRole('WARDEN'),
   async (req: Request, res: Response): Promise<void> => {
-    const wardenId = req.user!.id;
-    const id = param(req, 'id');
-    const { status, reviewRemarks } = req.body ?? {};
-
+    const { status } = req.body ?? {};
     if (!['APPROVED', 'REJECTED'].includes(status)) {
       res.status(400).json({ error: "Status must be 'APPROVED' or 'REJECTED'" });
       return;
     }
+    await applyReview(req, res, status as ReviewDecision);
+  },
+);
 
-    try {
-      const current = await prisma.leaveRequest.findUnique({ where: { id } });
-      if (!current) {
-        res.status(404).json({ error: 'Leave request not found' });
-        return;
-      }
+router.patch(
+  '/:id/approve',
+  authenticate,
+  requireRole('WARDEN'),
+  async (req: Request, res: Response): Promise<void> => {
+    await applyReview(req, res, 'APPROVED');
+  },
+);
 
-      if (current.status !== 'SUBMITTED') {
-        res.status(409).json({
-          error: `Invalid transition from ${current.status} to ${status}. Only SUBMITTED requests can be reviewed.`,
-        });
-        return;
-      }
-
-      let gatePassCode: string | undefined = undefined;
-      let gatePassQr: string | undefined = undefined;
-
-      if (status === 'APPROVED') {
-        // Generate a 6-char hex unique gate pass code
-        gatePassCode = `HG-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        gatePassQr = JSON.stringify({
-          passId: id,
-          code: gatePassCode,
-          studentId: current.studentId,
-          type: current.type,
-          exp: current.expectedReturn.toISOString(),
-        });
-      }
-
-      const updated = await prisma.leaveRequest.update({
-        where: { id },
-        data: {
-          status,
-          reviewedBy: wardenId,
-          reviewedAt: new Date(),
-          reviewRemarks: reviewRemarks ? String(reviewRemarks).trim() : null,
-          ...(gatePassCode ? { gatePassCode, gatePassQr } : {}),
-        },
-        include: {
-          student: { select: studentSelect },
-          reviewer: { select: wardenSelect },
-        },
-      });
-
-      leaveRequestsTotal.inc({ type: current.type, status });
-
-      try {
-        const io = getIO();
-        io.to(`student:${current.studentId}`).emit('leave:updated', updated);
-        io.to('wardens').emit('leave:updated', updated);
-      } catch (ioErr) {
-        logger.warn({ err: ioErr }, '[socket] could not emit leave:updated');
-      }
-
-      logger.info({ leaveId: id, status, wardenId }, '[leave] reviewed by warden');
-      res.json(updated);
-    } catch (error) {
-      logger.error({ err: error, id }, '[leave] failed to review leave');
-      res.status(500).json({ error: 'Could not process leave review' });
-    }
+router.patch(
+  '/:id/reject',
+  authenticate,
+  requireRole('WARDEN'),
+  async (req: Request, res: Response): Promise<void> => {
+    await applyReview(req, res, 'REJECTED');
   },
 );
 
@@ -715,11 +779,22 @@ router.get(
       status,
       type,
       studentName,
+      from,
+      to,
     } = req.query;
 
     const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 20));
     const skip = (pageNum - 1) * limitNum;
+
+    // Filters are by departure window: "who was scheduled out on these dates".
+    const fromDate = typeof from === 'string' && from.trim() ? new Date(from) : null;
+    const toDate = typeof to === 'string' && to.trim() ? new Date(to) : null;
+
+    if ((fromDate && isNaN(fromDate.getTime())) || (toDate && isNaN(toDate.getTime()))) {
+      res.status(400).json({ error: 'from and to must be valid ISO dates' });
+      return;
+    }
 
     try {
       const where: Record<string, unknown> = {};
@@ -735,6 +810,13 @@ router.get(
       if (typeof studentName === 'string' && studentName.trim().length > 0) {
         where.student = {
           name: { contains: studentName.trim(), mode: 'insensitive' },
+        };
+      }
+
+      if (fromDate || toDate) {
+        where.departureTime = {
+          ...(fromDate ? { gte: fromDate } : {}),
+          ...(toDate ? { lte: toDate } : {}),
         };
       }
 

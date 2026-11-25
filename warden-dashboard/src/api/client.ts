@@ -252,7 +252,16 @@ export function fetchLeaveStats(): Promise<LeaveStats> {
 }
 
 export function fetchLeaves(
-  params: { page?: number; limit?: number; status?: string; type?: string; studentName?: string } = {},
+  params: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    type?: string;
+    studentName?: string;
+    /** ISO date — filters on departureTime, inclusive. */
+    from?: string;
+    to?: string;
+  } = {},
 ): Promise<LeaveListResponse> {
   const query = new URLSearchParams();
   query.set('page', String(params.page ?? 1));
@@ -260,6 +269,8 @@ export function fetchLeaves(
   if (params.status) query.set('status', params.status);
   if (params.type) query.set('type', params.type);
   if (params.studentName) query.set('studentName', params.studentName);
+  if (params.from) query.set('from', params.from);
+  if (params.to) query.set('to', params.to);
   return api<LeaveListResponse>(`/leaves?${query.toString()}`);
 }
 
