@@ -54,8 +54,10 @@ item names the limit it addresses, so a reviewer can tell "not done yet" from
 
 ## 5. Product / UX
 
-- **Warden mobile app.** The dashboard is desktop-first; wardens on duty
-  usually carry a phone.
+- ~~**Warden mobile app.**~~ **Shipped for Android** in `warden_app/` (Flutter,
+  FCM push, full-screen alarm, on-duty foreground service). Remaining work is
+  iOS/Critical Alerts and production Firebase/keystore rollout; see
+  `docs/WARDEN_APP_RUNBOOK.md`.
 - **Two-way contact.** A warden cannot call or message the student from the
   dashboard beyond the `tel:` link.
 - **Resolution templates.** `resolutionNote` is free text (10–500 chars);

@@ -29,6 +29,7 @@ HostelGuard is a mission-critical emergency response and student hostel manageme
 
 - **Student Mobile App:** Flutter (Android/iOS/Web) — one-tap SOS, live location tracking, leave application & digital gate pass.
 - **Warden Dashboard:** React 19 + Vite + TypeScript + Tailwind CSS + Leaflet Maps + Socket.IO client.
+- **Warden Mobile App:** Flutter Android (`warden_app/`) — live alert board, acknowledge/resolve, leave desk, FCM push, full-screen alarm.
 - **Backend Services:** Node 20+ / Express 5 / TypeScript / Socket.IO 4 with Redis adapter / Prisma 6 ORM.
 - **Data & Queue Layer:** PostgreSQL 16 (transaction pooled) + Redis 7 (BullMQ delayed queues + Pub/Sub + rate limit store).
 - **Notification & Escalation:** Twilio (SMS & Voice IVR) + Firebase Cloud Messaging (FCM web push).

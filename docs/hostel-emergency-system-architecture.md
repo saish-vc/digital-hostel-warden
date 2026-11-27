@@ -151,7 +151,7 @@ Each record states the decision, the reason, and what we accept by choosing it. 
 
 **Decision.** The React dashboard is an installable PWA. Wardens opt in to Web Push via FCM. SMS (Twilio primary, MSG91 fallback) is reserved for escalation, not for the initial alert.
 
-**Why.** There is no native warden app in scope. Web Push reaches a locked phone or a backgrounded browser without building and shipping a second mobile client. SMS costs money per message and is slow to compose; using it for every alert at 500-student scale would be wasteful, but it is the right tool when a human has failed to respond.
+**Why.** At the time of this decision there was no native warden app. Web Push reaches a locked phone or a backgrounded browser without building and shipping a second mobile client. A native Android warden client now also ships (`warden_app/`); Web Push remains the dashboard's path and the fallback. SMS costs money per message and is slow to compose; using it for every alert at 500-student scale would be wasteful, but it is the right tool when a human has failed to respond.
 
 **Consequences.** Web Push on iOS requires the PWA to be installed to the home screen and iOS 16.4+. We must document that and treat "warden has installed the PWA and granted notification permission" as an operational checklist item, not an assumption.
 
@@ -288,7 +288,7 @@ Versions are pinned exactly. Pin the same values in `package.json`/`pubspec.yaml
 | Microservices | The domain has one bounded context. Splitting API and worker is an operational split, not a service-boundary claim. |
 | Sticky sessions + polling | See ADR-04. |
 | Continuous GPS tracking | See ADR-13. |
-| Native warden app | Out of scope; the PWA covers the requirement. Revisit only if background push on iOS proves unreliable in practice. |
+| Native warden app | Shipped for Android in `warden_app/` (FCM + full-screen alarm). The PWA remains the desktop/iOS path; see `docs/WARDEN_APP_RUNBOOK.md`. |
 
 ---
 
@@ -1661,16 +1661,16 @@ ESCALATION_MAX_ATTEMPTS=3
 # ── notifications ────────────────────────────────────────
 FIREBASE_PROJECT_ID=hostel-emergency
 FIREBASE_CLIENT_EMAIL=...
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
-TWILIO_ACCOUNT_SID=...
-TWILIO_AUTH_TOKEN=...
+FIREBASE_PRIVATE_KEY=<placeholder: service-account key, never a real key>
+TWILIO_ACCOUNT_SID=CHANGE-ME
+TWILIO_AUTH_TOKEN=CHANGE-ME
 TWILIO_FROM_NUMBER=+91...
 MSG91_AUTH_KEY=...
 MSG91_SENDER_ID=HOSTEL
 MSG91_TEMPLATE_ID=...
 
 # ── ops ──────────────────────────────────────────────────
-METRICS_TOKEN=<random>
+METRICS_TOKEN=CHANGE-ME
 SENTRY_DSN=...
 ```
 
@@ -1900,7 +1900,7 @@ Pick based on what actually hurt, not on what sounds impressive.
 - Two-way chat between warden and student during an alert.
 - Responder acknowledgement from a second device; "I'm responding" intermediate state.
 - Analytics: response-time trends by block and shift, drill scheduling.
-- Native warden app if PWA push proves unreliable on iOS in practice.
+- iOS warden client / Critical Alerts (the Android client ships in `warden_app/`).
 - Integration with campus security or ambulance dispatch.
 - Multi-tenant support for additional hostels — this is a re-architecture, not a feature; budget accordingly.
 
