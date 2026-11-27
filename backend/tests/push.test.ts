@@ -55,6 +55,21 @@ function lastMulticastMessage() {
     tokens?: string[];
     data?: Record<string, string>;
     notification?: { title?: string; body?: string };
+    android?: {
+      priority?: string;
+      ttl?: number;
+      notification?: {
+        channelId?: string;
+        sound?: string;
+        priority?: string;
+        visibility?: string;
+        tag?: string;
+      };
+    };
+    webpush?: {
+      headers?: Record<string, string>;
+      fcmOptions?: { link?: string };
+    };
   };
 }
 
@@ -128,6 +143,39 @@ describe('FCM multicast dispatch', () => {
       latitude: '12.34',
       longitude: '77.56',
     });
+  });
+
+  it('targets the native alert channel, sound and 5-minute TTL', async () => {
+    const warden = await createWarden();
+    const student = await createStudent();
+
+    await registerToken(tokenFor(warden, 'WARDEN'), 'token-android');
+
+    const response = await postAlert(tokenFor(student, 'STUDENT'));
+    expect(response.status).toBe(201);
+    const alertId = response.body.id as string;
+
+    await vi.waitFor(
+      () => {
+        expect(fcmMock.messaging.sendEachForMulticast).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 4_000, interval: 25 },
+    );
+
+    const message = lastMulticastMessage();
+    expect(message.android?.priority).toBe('high');
+    // firebase-admin takes milliseconds even though FCM's REST API says seconds.
+    expect(message.android?.ttl).toBe(300_000);
+    expect(message.android?.notification).toMatchObject({
+      channelId: 'warden_alerts',
+      sound: 'default',
+      priority: 'max',
+      visibility: 'public',
+      tag: `alert-${alertId}`,
+    });
+
+    // The web client must be byte-for-byte unchanged by the Android addition.
+    expect(message.webpush?.headers).toMatchObject({ Urgency: 'high', TTL: '300' });
   });
 
   it('batches three tokens for two wardens into one call', async () => {

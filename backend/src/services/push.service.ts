@@ -96,7 +96,22 @@ function buildBaseMessage(alert: AlertPayload): BaseMulticastMessage {
       longitude: alert.longitude === null ? '' : String(alert.longitude),
       url: `/alerts/${alert.id}`,
     },
-    android: { priority: 'high' },
+    // Native Android clients need a named channel that already exists at max
+    // importance, otherwise Android falls back to a low-importance channel it
+    // auto-creates and the alert arrives silently. `ttl` matches the webpush
+    // TTL: an alert older than 5 minutes is stale and must not ring.
+    // Everything outside this `android` block is unchanged for web clients.
+    android: {
+      priority: 'high',
+      ttl: 300_000,
+      notification: {
+        channelId: 'warden_alerts',
+        sound: 'default',
+        priority: 'max',
+        visibility: 'public',
+        tag: `alert-${alert.id}`,
+      },
+    },
     webpush: {
       headers: { Urgency: 'high', TTL: '300' },
       ...(link ? { fcmOptions: { link } } : {}),
