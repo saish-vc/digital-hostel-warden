@@ -1,0 +1,36 @@
+name: warden-app
+
+# Scoped to the Flutter warden client. Existing workflows are untouched.
+on:
+  push:
+    paths:
+      - 'warden_app/**'
+      - '.github/workflows/warden-app.yml'
+  pull_request:
+    paths:
+      - 'warden_app/**'
+      - '.github/workflows/warden-app.yml'
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: warden_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.2'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Unit and widget tests
+        run: flutter test

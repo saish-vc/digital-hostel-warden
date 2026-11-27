@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Debug-only override: the emulator (10.0.2.2) and LAN demos run on
+         plain HTTP. This file is not merged into release builds. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

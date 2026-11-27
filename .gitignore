@@ -12,6 +12,9 @@ coverage/
 !.env.test.example
 !.env.production.example
 firebase-service-account.json
+# Firebase Android config: not a server credential, but it embeds a Google API
+# key and the pre-commit scan flags that shape. Keep it local per checkout.
+google-services.json
 *.pem
 *.p12
 
